@@ -1,10 +1,10 @@
 (() => {
 "use strict";
-const CFG = window.MC_CONFIG || {};
+const CFG = window.CA_CONFIG || {};
 const CORE = window.CA_CORE;
 const { parseInputAmount, SHEET } = CORE;
 const CATEGORIE = ["Bisogno", "Desiderio"];
-// Il foglio lo crea l'app al primo avvio e lo ritrova su Drive dopo il login; l'ID resta sul telefono.
+// Nel codice non c'è niente di personale: il foglio lo crea l'app al primo avvio (o lo ritrova su Drive dopo il login) e il suo ID resta solo sul dispositivo.
 const sheetId = () => store.get("ca-sheet");
 const nome = () => store.get("ca-nome") || "";
 const SHEETS = "https://sheets.googleapis.com/v4/spreadsheets";
