@@ -225,3 +225,34 @@ test("renameSteps: rinomine incrociate passano da nomi provvisori", () => {
   for (const st of steps) cells = cells.map(c => c === st.old ? st.new : c);
   assert.deepEqual(cells, ["B", "X", "C"]);
 });
+
+test("ETF_LIST: id unici, ISIN di 12 caratteri, ticker presente", () => {
+  assert.ok(C.ETF_LIST.length >= 3);
+  assert.equal(new Set(C.ETF_LIST.map(e => e.id)).size, C.ETF_LIST.length);
+  for (const e of C.ETF_LIST) { assert.equal(e.isin.length, 12); assert.ok(e.nome && e.ticker); }
+  assert.equal(C.ETF_LIST[0].id, "vwrp");
+});
+
+test("priceFormula: formula con il ticker due volte e la gestione delle valute", () => {
+  const f = C.priceFormula("LON:VWRP");
+  assert.ok(f.startsWith("="));
+  assert.equal(f.split('"LON:VWRP"').length - 1, 2);
+  assert.ok(f.includes("GBX") && f.includes("CURRENCY:GBPEUR"));
+});
+
+test("settingsToRows: con un ETF della lista scrive la formula del prezzo (ha la precedenza)", () => {
+  const s = sample();
+  s.kv = { ...(s.kv || {}), etf: "vwrp", prezzoFormula: "=1+1" };
+  const rows = C.settingsToRows(s);
+  const i = rows.findIndex(r => r[11] === "prezzo");
+  assert.ok(String(rows[i][12]).includes("LON:VWRP"));
+  s.kv.etf = "";
+  assert.equal(C.settingsToRows(s)[i][12], "=1+1");
+  s.kv.etf = "sconosciuto"; s.kv.prezzoFormula = undefined;
+  assert.equal(C.settingsToRows(s)[i][12], "");
+});
+
+test("kvRow: riga della chiave nelle Impostazioni (foglio, 1 = prima riga dati A2)", () => {
+  assert.equal(C.kvRow("quote"), 9 + 1);
+  assert.equal(C.kvRow("nome"), 2);
+});

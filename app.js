@@ -225,12 +225,12 @@ function apply({ mov, imp, pac }) {
   S.conti = b.conti; S.totale = b.totale;
   S.pac = pac.map(r => ({ d: toDate(r[0]), etf: r[1] || "", imp: num(r[2]), quote: r[3] === "" || r[3] === undefined ? null : num(r[3]) })).filter(p => p.d && p.imp);
 }
-// L'ETF del piano di accumulo, ricavato dalle impostazioni (per ora uno solo; la schermata PAC viene rifatta più avanti).
+// Il PAC è acceso solo se nelle impostazioni è così; l'ETF è scelto da una lista fissa (kv.etf è l'id).
+const pacOn = () => S.set.kv.pac === true;
 function pacEtf() {
-  const k = S.set.kv;
-  if (!k.etf) return [];
+  const k = S.set.kv, info = CORE.ETF_LIST.find(x => x.id === k.etf);
   const valore = k.quote != null && k.prezzo != null ? Math.round(k.quote * k.prezzo * 100) / 100 : null;
-  return [{ nome: k.etf, isin: "", mensile: k.importo_pac, valore, agg: null }];
+  return { nome: info ? info.nome : k.etf, isin: info ? info.isin : "", mensile: k.importo_pac, valore };
 }
 const append = (range, values) => api("/values/" + encodeURIComponent(range) + ":append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS", { method: "POST", body: JSON.stringify({ values }) });
 
@@ -292,7 +292,8 @@ function pendingBanner() {
 
 // Se sul conto del PAC c'è meno della rata mensile, il prossimo versamento non può partire: avviso di ricaricare.
 function pacWarn() {
-  const plan = pacEtf().reduce((a, e) => a + e.mensile, 0), da = S.set.kv.conto_pac;
+  if (!pacOn()) return "";
+  const plan = S.set.kv.importo_pac, da = S.set.kv.conto_pac;
   const c = S.conti.find(x => x.nome === da);
   if (!plan || !c || c.saldo >= plan) return "";
   const np = nextPac(), hide = isHidden();
@@ -751,61 +752,51 @@ function nextPac() {
   return { d, days: Math.round((d - t) / 864e5) };
 }
 function vPac() {
-  const etf = pacEtf(), plan = etf.reduce((a, e) => a + e.mensile, 0);
-  const vers = n => S.pac.filter(p => p.etf === n).reduce((a, p) => a + p.imp, 0);
+  const e = pacEtf(), k = S.set.kv, plan = e.mensile;
   const totV = S.pac.reduce((a, p) => a + p.imp, 0);
-  const hasVal = etf.some(e => e.valore != null);
-  const totVal = etf.reduce((a, e) => a + (e.valore != null ? e.valore : vers(e.nome)), 0);
   const np = nextPac();
   const bal = n => S.conti.find(c => c.nome === n)?.saldo;
-  const colors = ["--accent", "--out"];
-  const labels = ["Azioni", "Obbligazioni"];
-  const single = etf.length === 1; // con un solo ETF la ripartizione e le ripetizioni non dicono niente
   const hist = byDateDesc(S.pac.map((p, i) => ({ ...p, row: i }))).slice(0, 12);
+  const qFmt = (q, d) => q.toLocaleString("it-IT", { maximumFractionDigits: d });
   return `
-  <div class="top"><div class="stack"><span class="eyebrow">Piano di accumulo · ${esc(S.set.kv.conto_pac)}</span><h1 class="h1">PAC</h1></div></div>
+  <div class="top"><div class="stack"><span class="eyebrow">Piano di accumulo · ${esc(k.conto_pac)}</span><h1 class="h1">PAC</h1></div></div>
   ${banner()}
   ${pacWarn()}
   <section class="hero" aria-label="Prossimo versamento">
     <div class="stack"><span class="eyebrow">Prossimo versamento</span>
       <span class="big" style="font-size:34px;line-height:1.1">${np.d.getDate()} ${MESI[np.d.getMonth()]}</span>
-      <span class="sub">${np.days === 0 ? "oggi" : np.days === 1 ? "domani" : "tra " + np.days + " giorni"} · ${M(plan)} da ${esc(S.set.kv.conto_pac)}</span></div>
+      <span class="sub">${np.days === 0 ? "oggi" : np.days === 1 ? "domani" : "tra " + np.days + " giorni"} · ${M(plan)} da ${esc(k.conto_pac)}</span></div>
     <div class="tiles two">
-      <div class="tile"><span>${hasVal ? "Valore attuale" : "Conto " + esc(S.set.kv.conto_inv)}</span><b>${hasVal ? M(totVal) : (bal(S.set.kv.conto_inv) != null ? M(bal(S.set.kv.conto_inv)) : "—")}</b></div>
-      <div class="tile"><span>${hasVal ? "Versato" : "Liquidità " + esc(S.set.kv.conto_pac)}</span><b>${hasVal ? M(totV) : (bal(S.set.kv.conto_pac) != null ? M(bal(S.set.kv.conto_pac)) : "—")}</b></div>
+      <div class="tile"><span>${e.valore != null ? "Valore attuale" : "Conto " + esc(k.conto_inv)}</span><b>${e.valore != null ? M(e.valore) : (bal(k.conto_inv) != null ? M(bal(k.conto_inv)) : "—")}</b></div>
+      <div class="tile"><span>${e.valore != null ? "Versato" : "Liquidità " + esc(k.conto_pac)}</span><b>${e.valore != null ? M(totV) : (bal(k.conto_pac) != null ? M(bal(k.conto_pac)) : "—")}</b></div>
     </div>
   </section>
   <section class="card">
-    <span class="eyebrow">I tuoi ETF</span>
-    ${etf.map((e, i) => { const v = vers(e.nome); return `<div class="etf">
-      <div class="row"><span class="nm">${esc(e.nome)}</span><b style="white-space:nowrap">${M0(e.mensile)}/mese</b></div>
-      ${single ? (e.isin ? `<div class="row sub"><span>${esc(e.isin)}</span></div>` : "") : `<div class="row sub"><span>${esc(e.isin || "")}${e.isin ? " · " : ""}versato ${M(v)}</span><span>${plan ? Math.round(e.mensile / plan * 100) : 0}%</span></div>`}
-      ${e.valore != null ? `<div class="row sub"><span>valore ${M(e.valore)}</span><span class="${e.valore - v >= 0 ? "pos" : ""}">${e.valore - v >= 0 ? "+" : ""}${M(e.valore - v)}</span></div>` : ""}
-      ${i === 0 && S.set.kv.quote != null ? `<div class="row sub"><span>${S.set.kv.quote.toLocaleString("it-IT", { maximumFractionDigits: 6 })} quote${S.set.kv.prezzo != null ? " · " + M(S.set.kv.prezzo) + " a quota (Google Finance)" : ""}</span></div>` : ""}
-    </div>`; }).join("") || `<span class="empty">Aggiungi gli ETF nel foglio Impostazioni.</span>`}
-    ${etf.length > 1 ? `<div class="split">${etf.map((e, i) => `<i style="width:${plan ? e.mensile / plan * 100 : 0}%;background:var(${colors[i] || "--muted"})"></i>`).join("")}</div>
-    <div class="legend">${etf.map((e, i) => `<span><i class="sw" style="background:var(${colors[i] || "--muted"})"></i>${labels[i] || esc(e.nome)}</span>`).join("")}</div>` : ""}
+    <span class="eyebrow">Il tuo ETF</span>
+    <div class="etf">
+      <div class="row"><span class="nm">${esc(e.nome)}</span><b style="white-space:nowrap">${M0(plan)}/mese</b></div>
+      ${e.isin ? `<div class="row sub"><span>${esc(e.isin)}</span></div>` : ""}
+      ${e.valore != null ? `<div class="row sub"><span>valore ${M(e.valore)}</span><span class="${e.valore - totV >= 0 ? "pos" : ""}">${e.valore - totV >= 0 ? "+" : ""}${M(e.valore - totV)}</span></div>` : ""}
+      ${k.quote != null ? `<div class="row sub"><span>${qFmt(k.quote, 6)} quote${k.prezzo != null ? " · " + M(k.prezzo) + " a quota" : ""}</span></div>` : ""}
+    </div>
     <button class="btn ghost" id="toggleVal">${S.valForm ? "Chiudi" : "Aggiorna quote possedute"}</button>
     ${S.valForm ? `<form id="valForm" class="stack" style="gap:12px">
-      <div class="field"><label for="quoteIn">Quote totali che vedi su ${esc(S.set.kv.conto_pac || "il broker")}</label><input class="inp" id="quoteIn" inputmode="decimal" placeholder="es. 1,164669" value="${S.set.kv.quote != null ? S.set.kv.quote.toLocaleString("it-IT", { maximumFractionDigits: 6 }) : ""}"></div>
+      <div class="field"><label for="quoteIn">Quote totali che vedi su ${esc(k.conto_pac || "il broker")}</label><input class="inp" id="quoteIn" inputmode="decimal" placeholder="es. 1,164669" value="${k.quote != null ? qFmt(k.quote, 6) : ""}"></div>
       <span class="sub" style="font-size:13px">Il valore si calcola da solo: quote × prezzo di oggi.</span>
       <span class="err" id="valErr" role="alert"></span>
       <button class="btn" type="submit" id="valSave">Salva quote</button></form>` : ""}
   </section>
   <section class="card">
     <div class="row"><span class="eyebrow">Versamenti</span><span class="sub">${S.pac.length === 1 ? "1 registrato" : S.pac.length + " registrati"}</span></div>
-    ${hist.length ? `<div class="list">${hist.map(p => `${single
-      ? `<div class="mv single"><div class="t"><b>${p.d.getDate()} ${MESI[p.d.getMonth()]} ${p.d.getFullYear()}</b>${p.quote ? `<span>${p.quote.toLocaleString("it-IT", { maximumFractionDigits: 4 })} quote</span>` : ""}</div>`
-      : `<div class="mv"><span class="badge in" aria-hidden="true">${esc((p.etf.split(" ")[2] || "ET").slice(0, 2))}</span>
-      <div class="t"><b>${esc(p.etf)}</b><span>${p.d.getDate()} ${MESI[p.d.getMonth()]} ${p.d.getFullYear()}${p.quote ? " · " + p.quote.toLocaleString("it-IT", { maximumFractionDigits: 4 }) + " quote" : ""}</span></div>`}
+    ${hist.length ? `<div class="list">${hist.map(p => `<div class="mv single"><div class="t"><b>${p.d.getDate()} ${MESI[p.d.getMonth()]} ${p.d.getFullYear()}</b>${p.quote ? `<span>${qFmt(p.quote, 4)} quote</span>` : ""}</div>
       <span class="a">${M(p.imp)}</span></div>`).join("")}</div>` : `<span class="sub" style="font-size:14px">Il primo arriva il ${np.d.getDate()} ${MESI[np.d.getMonth()]}. Registralo qui quando il broker lo esegue.</span>`}
     <button class="btn ghost" id="togglePac">${S.pacForm ? "Chiudi" : "Registra versamento"}</button>
     ${S.pacForm ? `<form id="pacForm" class="stack" style="gap:12px">
       <div class="field"><label for="pacDate">Data</label><input class="inp" type="date" id="pacDate" value="${isoDate(new Date())}"></div>
-      ${etf.map((e, i) => `<div class="field"><span class="lab">${esc(e.nome)}</span><div class="pair" style="grid-template-columns:1fr 1fr">
-        <input class="inp" id="pacAmt${i}" inputmode="decimal" value="${fmt2(e.mensile)}" aria-label="Importo ${esc(e.nome)}">
-        <input class="inp" id="pacQ${i}" inputmode="decimal" placeholder="quote, se le sai" aria-label="Quote ${esc(e.nome)}"></div></div>`).join("")}
-      <label class="check"><input type="checkbox" id="pacTr" checked><span>Registra anche il trasferimento ${esc(S.set.kv.conto_pac)} → ${esc(S.set.kv.conto_inv)}, così i saldi dei conti restano giusti</span></label>
+      <div class="field"><span class="lab">${esc(e.nome)}</span><div class="pair" style="grid-template-columns:1fr 1fr">
+        <input class="inp" id="pacAmt" inputmode="decimal" value="${fmt2(plan)}" aria-label="Importo">
+        <input class="inp" id="pacQ" inputmode="decimal" placeholder="quote, se le sai" aria-label="Quote"></div></div>
+      <label class="check"><input type="checkbox" id="pacTr" checked><span>Registra anche il trasferimento ${esc(k.conto_pac)} → ${esc(k.conto_inv)}, così i saldi dei conti restano giusti</span></label>
       <span class="err" id="pacErr" role="alert"></span>
       <button class="btn" type="submit" id="pacSave">Salva versamento</button></form>` : ""}
   </section>
@@ -827,13 +818,15 @@ function vPac() {
     </details>
   </section>`;
 }
-
-/* ---------- render ---------- */
 function render() {
   const authed = !!sheetId() && (!!token() || S.mov.length > 0);
   const app = $("#app");
   if (!authed) { $("#nav").hidden = true; app.innerHTML = vWelcome(); bind(); return; }
   $("#nav").hidden = false;
+  // La scheda PAC c'è solo se il piano è acceso nelle impostazioni.
+  if (S.tab === "pac" && !pacOn()) S.tab = "home";
+  $('.tab[data-tab="pac"]').hidden = !pacOn();
+  $(".nav-in").classList.toggle("no-pac", !pacOn());
   VIEW.clear();
   // Quello che hai scritto nei moduli PAC non si perde se la schermata si ridisegna (aggiornamento in background).
   const typed = {};
@@ -907,6 +900,8 @@ const newCfg = () => ({
   conti: S.set.conti.map(c => ({ nome: c.nome, orig: c.nome, inizText: String(c.iniziale).replace(".", ","), totale: c.totale, nascosto: c.nascosto })),
   spesa: S.set.spesa.map(c => ({ nome: c.nome, orig: c.nome, nascosta: c.nascosta })),
   entrata: S.set.entrata.map(c => ({ nome: c.nome, orig: c.nome, nascosta: c.nascosta })),
+  pac: S.set.kv.pac === true, etf: S.set.kv.etf, impText: S.set.kv.importo_pac ? String(S.set.kv.importo_pac).replace(".", ",") : "",
+  giornoText: String(S.set.kv.giorno_pac || 16), contoPac: S.set.kv.conto_pac,
   nome: S.set.kv.nome || nome(), adding: null, addText: "", addErr: "", err: "", saving: false,
 });
 const isOff = it => !!(it.nascosto || it.nascosta);
@@ -941,12 +936,35 @@ function vSettings() {
   ${sec}
   <section class="card"><span class="eyebrow">Nome</span>
     <div class="field"><label class="sr" for="cfgNome">Il tuo nome</label><input class="inp" id="cfgNome" maxlength="30" autocomplete="off" value="${esc(c.nome)}"></div></section>
-  <!-- Task 8: sezione Colore. Task 7: sezione PAC. -->
+  ${pacSection(c)}
+  <!-- Task 8: sezione Colore. -->
   <div class="stack" style="gap:10px;padding-bottom:16px"><span class="err" id="cfgErr" role="alert">${esc(c.err)}</span>
     <button class="btn" type="button" id="cfgSave" ${c.saving ? "disabled" : ""}>${c.saving ? "Salvo…" : "Salva"}</button></div>`;
 }
+// Piano di accumulo (PAC): facoltativo, spento finché non lo accendi qui.
+function pacSection(c) {
+  const conti = c.conti.filter(it => !it.nascosto && it.nome.trim());
+  const body = !c.pac ? "" : `
+    <div class="field"><label for="cfgEtf">ETF</label><select class="inp" id="cfgEtf">
+      <option value="" ${c.etf ? "" : "selected"}>Scegli un ETF</option>
+      ${CORE.ETF_LIST.map(e => `<option value="${e.id}" ${c.etf === e.id ? "selected" : ""}>${esc(e.nome)} (${esc(e.isin)})</option>`).join("")}</select>
+      <span class="sub" style="font-size:13px">Il tuo ETF non c'è? Chiedilo a Paolo.</span></div>
+    <div class="field"><label for="cfgImp">Importo mensile</label><input class="inp" id="cfgImp" inputmode="decimal" autocomplete="off" placeholder="es. 100" value="${esc(c.impText)}"></div>
+    <div class="field"><label for="cfgGiorno">Giorno del mese (da 1 a 28)</label><input class="inp" id="cfgGiorno" inputmode="numeric" autocomplete="off" value="${esc(c.giornoText)}"></div>
+    <div class="field"><label for="cfgContoPac">Da quale conto partono i soldi</label><select class="inp" id="cfgContoPac">
+      <option value="" ${conti.some(it => (it.orig || it.nome.trim()) === c.contoPac) ? "" : "selected"}>Scegli un conto</option>
+      ${conti.map(it => { const v = it.orig || it.nome.trim(); return `<option value="${esc(v)}" ${v === c.contoPac ? "selected" : ""}>${esc(it.nome.trim())}</option>`; }).join("")}</select></div>`;
+  return `<section class="card"><span class="eyebrow">Piano di accumulo (PAC)</span>
+    <label class="check"><input type="checkbox" id="cfgPac" ${c.pac ? "checked" : ""}><span>Investo ogni mese in un ETF</span></label>${body}</section>`;
+}
 function bindSettings() {
   const c = S.cfg; if (!c) return;
+  const pacIn = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, () => fn(el)); };
+  pacIn("#cfgPac", "change", el => { c.pac = el.checked; render(); });
+  pacIn("#cfgEtf", "change", el => { c.etf = el.value; });
+  pacIn("#cfgImp", "input", el => { c.impText = el.value; });
+  pacIn("#cfgGiorno", "input", el => { c.giornoText = el.value; });
+  pacIn("#cfgContoPac", "change", el => { c.contoPac = el.value; });
   const focusEl = sel => { const el = $(sel); if (el) el.focus(); return !!el; };
   $$("[data-f]").forEach(el => el.addEventListener("input", () => {
     const it = c[el.dataset.k][+el.dataset.i], f = el.dataset.f;
@@ -994,7 +1012,7 @@ function cfgAddOk() {
 function cfgRemove(key, i) {
   const c = S.cfg, list = c[key], it = list[i], kind = kindOf(key);
   const k = S.set.kv;
-  if (key === "conti" && it.orig && (it.orig === k.conto_pac || it.orig === k.conto_inv)) { toast("Questo conto serve al piano di accumulo: non si può togliere."); return; }
+  if (key === "conti" && it.orig && k.pac && (it.orig === k.conto_pac || it.orig === k.conto_inv)) { toast("Questo conto serve al piano di accumulo: non si può togliere."); return; }
   const n = it.orig ? CORE.usage(S.mov, kind, it.orig) : 0;
   list.splice(i, 1);
   if (n > 0) {
@@ -1026,6 +1044,23 @@ async function cfgSave() {
   const nomeUtente = c.nome.trim();
   if (!nomeUtente) { say("Scrivi il tuo nome."); return; }
   if (nomeUtente.length > 30) { say("Il nome: al massimo 30 caratteri."); return; }
+  // PAC: si controlla solo da acceso; da spento non si toccano né i dati né i versamenti.
+  let pacKv = {};
+  if (c.pac) {
+    if (!CORE.ETF_LIST.some(e => e.id === c.etf)) { say("Piano di accumulo: scegli un ETF."); return; }
+    const imp = CORE.parseInputAmount(c.impText.trim());
+    if (!(imp > 0)) { say("Piano di accumulo: l'importo mensile deve essere un numero maggiore di zero."); return; }
+    const gt = c.giornoText.trim(), giorno = /^\d{1,2}$/.test(gt) ? +gt : NaN;
+    if (!(giorno >= 1 && giorno <= 28)) { say("Piano di accumulo: il giorno deve essere tra 1 e 28."); return; }
+    const src = c.conti.findIndex(it => !it.nascosto && (it.orig || it.nome.trim()) === c.contoPac);
+    if (src < 0) { say("Piano di accumulo: scegli il conto da cui partono i soldi."); return; }
+    const contoPac = next.conti[src].nome;
+    let inv = next.conti.find(x => x.nome === "Investimenti");
+    if (!inv) { inv = { nome: "Investimenti", iniziale: 0, totale: false, nascosto: false }; next.conti.push(inv); }
+    else if (inv.nascosto) inv.nascosto = false;
+    if (inv.nome === contoPac) { say("Piano di accumulo: scegli un conto diverso da Investimenti."); return; }
+    pacKv = { pac: true, etf: c.etf, importo_pac: imp, giorno_pac: giorno, conto_pac: contoPac, conto_inv: "Investimenti" };
+  } else pacKv = { pac: false };
   const changes = [];
   for (const [key, , kind] of CFG_SEC) c[key].forEach(it => { const nuovo = it.nome.trim(); if (it.orig && it.orig !== nuovo) changes.push({ key, kind, old: it.orig, new: nuovo }); });
   if (changes.length && Q.all().length) { say("Ci sono movimenti in attesa di essere inviati: aspetta che partano e riprova."); return; }
@@ -1041,6 +1076,7 @@ async function cfgSave() {
   }
   const kv = { ...S.set.kv, nome: nomeUtente };
   for (const ch of changes) if (ch.kind === "conto") for (const f of ["conto_pac", "conto_inv"]) if (kv[f] === ch.old) kv[f] = ch.new;
+  Object.assign(kv, pacKv);
   const requests = [];
   CORE.renameSteps(changes.filter(ch => ch.kind === "conto")).forEach(st => requests.push(...CORE.renameRequests(st.kind, st.old, st.new)));
   // Ogni riga ha un solo nome vecchio e le richieste partono tutte dalla stessa lettura: niente nomi provvisori.
@@ -1338,20 +1374,13 @@ async function savePac(ev) {
   ev.preventDefault();
   const err = $("#pacErr"); err.textContent = "";
   const d = $("#pacDate").value ? fromIso($("#pacDate").value) : new Date(), ds = sheetDate(d);
-  const rows = [];
-  let bad = "";
-  pacEtf().forEach((e, i) => {
-    const aRaw = $("#pacAmt" + i).value.trim(), qRaw = $("#pacQ" + i).value.trim();
-    const imp = parseInputAmount(aRaw), q = parseQuote(qRaw);
-    // Un campo compilato ma non leggibile non si scarta in silenzio: si avvisa.
-    if (aRaw && !(imp > 0)) bad = "Importo non valido per " + e.nome + ".";
-    else if (qRaw && !(q > 0)) bad = "Quote non valide per " + e.nome + ": scrivi solo il numero, per esempio 0,5.";
-    else if (imp > 0) rows.push([ds, e.nome, imp, q > 0 ? q : "", q > 0 ? Math.round(imp / q * 100) / 100 : "", ""]);
-  });
-  if (bad) { err.textContent = bad; return; }
-  if (!rows.length) { err.textContent = "Inserisci almeno un importo."; return; }
-  const tot = rows.reduce((a, r) => a + r[2], 0);
-  const ops = [{ range: "PAC!A:F", rows }];
+  const e = pacEtf(), aRaw = $("#pacAmt").value.trim(), qRaw = $("#pacQ").value.trim();
+  const imp = parseInputAmount(aRaw), q = parseQuote(qRaw);
+  // Un campo compilato ma non leggibile non si scarta in silenzio: si avvisa.
+  if (!(imp > 0)) { err.textContent = aRaw ? "Importo non valido." : "Inserisci l'importo."; return; }
+  if (qRaw && !(q > 0)) { err.textContent = "Quote non valide: scrivi solo il numero, per esempio 0,5."; return; }
+  const rows = [[ds, e.nome, imp, q > 0 ? q : "", q > 0 ? Math.round(imp / q * 100) / 100 : "", ""]];
+  const tot = imp, ops = [{ range: "PAC!A:F", rows }];
   if ($("#pacTr").checked) ops.push({ range: "Movimenti!A:G", rows: [[ds, "Spesa", "Trasferimenti", tot, "Bisogno", S.set.kv.conto_pac, "PAC verso " + S.set.kv.conto_inv], [ds, "Entrata", "Trasferimenti", tot, "", S.set.kv.conto_inv, "PAC da " + S.set.kv.conto_pac]] });
   // Lo passo sempre dalla coda: se la rete cade tra le due scritture, la seconda riparte senza ripetere la prima.
   const it = { id: newId(), ops, done: 0, at: Date.now() };
@@ -1374,7 +1403,7 @@ async function saveVal(ev) {
   if (!(q > 0)) { err.textContent = "Scrivi il numero di quote, per esempio 1,164669."; return; }
   const btn = $("#valSave"); btn.disabled = true; btn.textContent = "Salvo…";
   try {
-    await api("/values/" + encodeURIComponent("Impostazioni!M10") + "?valueInputOption=RAW", { method: "PUT", body: JSON.stringify({ values: [[q]] }) });
+    await api("/values/" + encodeURIComponent("Impostazioni!M" + CORE.kvRow("quote")) + "?valueInputOption=RAW", { method: "PUT", body: JSON.stringify({ values: [[q]] }) });
     S.valForm = false; toast("Quote aggiornate"); loadAll();
   } catch (e) {
     btn.disabled = false; btn.textContent = "Salva quote";

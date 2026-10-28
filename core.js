@@ -8,6 +8,15 @@ const str = v => (v == null ? "" : String(v)).trim();
 const num = (v, def) => { if (typeof v === "number" && isFinite(v)) return v; const n = parseFloat(String(v == null ? "" : v).replace(",", ".")); return isFinite(n) ? n : def; };
 const yes = v => str(v).toUpperCase() === "SI";
 const sn = b => (b ? "SI" : "NO");
+const ETF_LIST = [
+  { id: "vwrp", nome: "Vanguard FTSE All-World UCITS ETF (USD) Acc", isin: "IE00BK5BQT80", ticker: "LON:VWRP" },
+  { id: "swda", nome: "iShares Core MSCI World UCITS ETF (Acc)", isin: "IE00B4L5Y983", ticker: "LON:SWDA" },
+  { id: "cspx", nome: "iShares Core S&P 500 UCITS ETF (Acc)", isin: "IE00B5BMR087", ticker: "LON:CSPX" },
+];
+// Prezzo in euro di un titolo di Google Finance, qualunque sia la valuta di quotazione (GBX = pence).
+const priceFormula = t => '=LET(p;GOOGLEFINANCE("' + t + '");c;GOOGLEFINANCE("' + t + '";"currency");IF(c="EUR";p;IF(c="GBX";p/100*GOOGLEFINANCE("CURRENCY:GBPEUR");p*GOOGLEFINANCE("CURRENCY:"&c&"EUR"))))';
+// Riga del foglio (Impostazioni) che contiene la chiave indicata: i valori partono dalla riga 2.
+const kvRow = key => KV_KEYS.indexOf(key) + 2;
 const cents = n => Math.round(n * 100) / 100;
 
 function parseSettings(rows) {
@@ -38,7 +47,7 @@ function settingsToRows(s) {
   KV_KEYS.forEach((key, i) => {
     let v = k[key];
     if (key === "pac") v = sn(v);
-    else if (key === "prezzo") v = k.prezzoFormula || ""; // il prezzo è una formula: riscriverla evita di cancellarla
+    else if (key === "prezzo") { const e = ETF_LIST.find(x => x.id === k.etf); v = e ? priceFormula(e.ticker) : (k.prezzoFormula || ""); } // il prezzo è una formula: riscriverla evita di cancellarla
     else if (v == null) v = "";
     rows[i][11] = key; rows[i][12] = v;
   });
@@ -195,6 +204,6 @@ function buildFormatRequests() {
   ];
 }
 
-const C = { SHEET, parseSettings, settingsToRows, renameRequests, renameRowRequests, rowsToRename, renameSteps, settingsUpdateRequest, usage, buildCreateBody, buildFormatRequests, computeBalances, validateName, parseInputAmount, parseSignedAmount };
+const C = { SHEET, ETF_LIST, priceFormula, kvRow, parseSettings, settingsToRows, renameRequests, renameRowRequests, rowsToRename, renameSteps, settingsUpdateRequest, usage, buildCreateBody, buildFormatRequests, computeBalances, validateName, parseInputAmount, parseSignedAmount };
 if (typeof module === "object" && module.exports) module.exports = C; else root.CA_CORE = C;
 })(typeof window !== "undefined" ? window : globalThis);
