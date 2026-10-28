@@ -1,7 +1,7 @@
 (() => {
 "use strict";
 const CFG = window.MC_CONFIG || {};
-const MOV_SHEET_ID = 100; // sheetId del foglio Movimenti
+const { parseInputAmount, SHEET } = window.CA_CORE;
 // Il foglio e il nome non sono nel codice: si inseriscono al primo avvio e restano sul telefono.
 const sheetId = () => store.get("ca-sheet");
 const nome = () => store.get("ca-nome") || "";
@@ -36,16 +36,6 @@ const num = v => {
   if (!s) return 0;
   if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
   const n = parseFloat(s); return isNaN(n) ? 0 : n;
-};
-// Accetta "12,50", "12.5", "1.500" (= millecinquecento) e "1.500,25"; testo con lettere o simboli strani no.
-const parseInputAmount = (s, dec = 2) => {
-  let t = String(s || "").trim().replace(/[\s€]/g, "");
-  if (!/^\d[\d.,]*$/.test(t)) return NaN;
-  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
-  else if (/^[1-9]\d{0,2}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
-  if (!/^\d+(\.\d+)?$/.test(t)) return NaN;
-  const k = Math.pow(10, dec);
-  return Math.round(parseFloat(t) * k) / k;
 };
 // Le quote non sono mai a migliaia: il punto è sempre un decimale ("1.164" = 1,164). Fino a 6 decimali; NaN se non è un numero.
 const parseQuote = s => {
@@ -905,7 +895,7 @@ async function undo(r1, r2, written) {
   try {
     // Come per Elimina: prima controllo che quelle righe siano ancora il movimento appena scritto.
     await checkRows(written);
-    await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId: MOV_SHEET_ID, dimension: "ROWS", startIndex: r1 - 1, endIndex: r2 } } }] }) });
+    await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId: SHEET.mov, dimension: "ROWS", startIndex: r1 - 1, endIndex: r2 } } }] }) });
     toast("Movimento eliminato dal foglio");
   } catch (e) { toast(e.code === "changed" ? "Il foglio è cambiato nel frattempo: non ho toccato niente, eliminalo dal foglio." : "Non sono riuscito ad annullare: eliminalo dal foglio."); }
   loadAll();
@@ -998,7 +988,7 @@ async function deleteMv(m) {
     const parts = partsOf(m);
     await checkRows(parts);
     // Dalla riga più in basso, così le altre non cambiano numero.
-    const requests = parts.map(p => p.row).sort((a, b) => b - a).map(r => ({ deleteDimension: { range: { sheetId: MOV_SHEET_ID, dimension: "ROWS", startIndex: r - 1, endIndex: r } } }));
+    const requests = parts.map(p => p.row).sort((a, b) => b - a).map(r => ({ deleteDimension: { range: { sheetId: SHEET.mov, dimension: "ROWS", startIndex: r - 1, endIndex: r } } }));
     await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
     closeAdd(); toast((m.kind === "tr" ? "Trasferimento" : "Movimento") + " eliminato"); loadAll();
   } catch (e) {

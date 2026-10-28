@@ -1,8 +1,8 @@
 // Tiene in cache i file dell'app, così si apre anche senza rete.
 // I dati del foglio non passano di qui: arrivano sempre da Google.
-const VERSION = "ca-v1";
+const VERSION = "ca-v2";
 const SHELL = [
-  "./", "./index.html", "./app.js", "./config.js", "./manifest.webmanifest",
+  "./", "./index.html", "./core.js", "./app.js", "./config.js", "./manifest.webmanifest",
   "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/favicon.png"
 ];
 
