@@ -818,6 +818,7 @@ function vPac() {
     </details>
   </section>`;
 }
+/* ---------- render ---------- */
 function render() {
   const authed = !!sheetId() && (!!token() || S.mov.length > 0);
   const app = $("#app");
@@ -1055,11 +1056,15 @@ async function cfgSave() {
     const src = c.conti.findIndex(it => !it.nascosto && (it.orig || it.nome.trim()) === c.contoPac);
     if (src < 0) { say("Piano di accumulo: scegli il conto da cui partono i soldi."); return; }
     const contoPac = next.conti[src].nome;
-    let inv = next.conti.find(x => x.nome === "Investimenti");
+    // Il conto investimenti si riconosce dal nome originale (anche se lo rinomini adesso); "Investimenti" solo alla prima creazione.
+    const k0 = S.set.kv.conto_inv;
+    let ii = k0 ? c.conti.findIndex(it => it.orig === k0) : -1;
+    if (ii < 0) ii = c.conti.findIndex(it => !it.orig ? false : it.orig === "Investimenti");
+    let inv = ii >= 0 ? next.conti[ii] : null;
     if (!inv) { inv = { nome: "Investimenti", iniziale: 0, totale: false, nascosto: false }; next.conti.push(inv); }
-    else if (inv.nascosto) inv.nascosto = false;
-    if (inv.nome === contoPac) { say("Piano di accumulo: scegli un conto diverso da Investimenti."); return; }
-    pacKv = { pac: true, etf: c.etf, importo_pac: imp, giorno_pac: giorno, conto_pac: contoPac, conto_inv: "Investimenti" };
+    else { inv.nascosto = false; inv.totale = false; }
+    if (inv.nome === contoPac) { say("Piano di accumulo: scegli un conto diverso da quello degli investimenti (" + inv.nome + ")."); return; }
+    pacKv = { pac: true, etf: c.etf, importo_pac: imp, giorno_pac: giorno, conto_pac: contoPac, conto_inv: inv.nome };
   } else pacKv = { pac: false };
   const changes = [];
   for (const [key, , kind] of CFG_SEC) c[key].forEach(it => { const nuovo = it.nome.trim(); if (it.orig && it.orig !== nuovo) changes.push({ key, kind, old: it.orig, new: nuovo }); });
@@ -1170,7 +1175,8 @@ function fields() {
   // Conti nascosti fuori dalle scelte; il conto degli investimenti si usa solo nei trasferimenti (non ci si paga né ci si riceve uno stipendio).
   const nascosti = new Set(S.conti.filter(c => c.nascosto).map(c => c.nome));
   const inv = S.set.kv.conto_inv;
-  const tutti = S.conti.map(c => c.nome).filter(c => !nascosti.has(c));
+  // A PAC spento il conto investimenti non compare in nessuna scelta (resta nel foglio, con i suoi movimenti).
+  const tutti = S.conti.map(c => c.nome).filter(c => !nascosti.has(c) && (pacOn() || c !== inv));
   const fuori = c => c === inv || nascosti.has(c);
   if (A.tipo !== "Trasferimento" && !EDIT && fuori(A.conto)) A.conto = ""; // l'ultimo conto usato può essere uno di quelli esclusi
   // In Modifica, una voce nascosta già usata dal movimento resta visibile e selezionata (lo fa chips()).
