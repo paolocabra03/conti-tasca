@@ -4,11 +4,14 @@ const CFG = window.MC_CONFIG || {};
 const CORE = window.CA_CORE;
 const { parseInputAmount, SHEET } = CORE;
 const CATEGORIE = ["Bisogno", "Desiderio"];
-// Il foglio e il nome non sono nel codice: si inseriscono al primo avvio e restano sul telefono.
+// Il foglio lo crea l'app al primo avvio e lo ritrova su Drive dopo il login; l'ID resta sul telefono.
 const sheetId = () => store.get("ca-sheet");
 const nome = () => store.get("ca-nome") || "";
-const API = () => "https://sheets.googleapis.com/v4/spreadsheets/" + sheetId();
-const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+const SHEETS = "https://sheets.googleapis.com/v4/spreadsheets";
+const DRIVE = "https://www.googleapis.com/drive/v3/files";
+const API = () => SHEETS + "/" + sheetId();
+// Solo i file creati dall'app: niente accesso al resto di Drive.
+const SCOPE = "https://www.googleapis.com/auth/drive.file";
 const MESI = ["gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"];
 const MESI_B = ["gen","feb","mar","apr","mag","giu","lug","ago","set","ott","nov","dic"];
 
@@ -67,6 +70,7 @@ const S = {
   movMonth: monthStart(new Date()), movFilter: "tutti", movQuery: "",
   chartMonth: monthStart(new Date()),
   pacForm: false, valForm: false,
+  finding: false, firstRun: false, creating: false,
 };
 
 /* ---------- accesso Google ---------- */
@@ -78,7 +82,6 @@ function token() {
 }
 function login(silent) {
   if (!CFG.clientId || CFG.clientId.startsWith("DA_INSERIRE")) { S.error = { code: "config" }; render(); return; }
-  if (!sheetId()) { render(); return; }
   if (!navigator.onLine) { S.error = { code: "offline" }; render(); return; }
   const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
   store.set("ca-oauth-state", { state, silent: !!silent, at: Date.now() });
@@ -111,13 +114,14 @@ function logout() {
   render();
 }
 
-/* ---------- Sheets ---------- */
-async function api(path, opts = {}) {
+/* ---------- Sheets e Drive ---------- */
+// Richiesta autenticata a un indirizzo completo; api() è la scorciatoia per il foglio collegato.
+async function req(url, opts = {}) {
   const t = token();
   if (!t) throw new AuthError("no token");
   let res;
   try {
-    res = await fetch(API() + path, { ...opts, headers: { "Authorization": "Bearer " + t, "Content-Type": "application/json", ...(opts.headers || {}) } });
+    res = await fetch(url, { ...opts, headers: { "Authorization": "Bearer " + t, "Content-Type": "application/json", ...(opts.headers || {}) } });
   } catch (e) { const err = new Error("rete"); err.code = "offline"; throw err; }
   if (res.status === 401) { store.del("ca-token"); throw new AuthError("expired"); }
   if (!res.ok) {
@@ -126,6 +130,55 @@ async function api(path, opts = {}) {
     const err = new Error(msg); err.code = res.status === 403 ? "forbidden" : res.status === 404 ? "notfound" : "http"; throw err;
   }
   return res.json();
+}
+const api = (path, opts) => req(API() + path, opts);
+
+// Il foglio dell'app si riconosce dalla proprietà nascosta contabile=1; se sono più d'uno vince il modificato più di recente.
+async function findSheet() {
+  const p = new URLSearchParams({ q: "appProperties has { key='contabile' and value='1' } and trashed=false", orderBy: "modifiedTime desc", fields: "files(id)" });
+  const r = await req(DRIVE + "?" + p.toString());
+  return (r.files && r.files[0] && r.files[0].id) || null;
+}
+async function tagSheet(id) {
+  await req(DRIVE + "/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify({ appProperties: { contabile: "1" } }) });
+  if (sheetId() === id) store.set("ca-tagged", id);
+}
+// Crea il foglio e lo collega subito: se il segno su Drive non arriva, si riprova al prossimo avvio (ca-tagged diverso).
+async function createSheet(input) {
+  const r = await req(SHEETS, { method: "POST", body: JSON.stringify(CORE.buildCreateBody(input)) });
+  const id = r.spreadsheetId;
+  store.set("ca-sheet", id);
+  try { await req(SHEETS + "/" + id + ":batchUpdate", { method: "POST", body: JSON.stringify({ requests: CORE.buildFormatRequests() }) }); } catch {} // solo estetica
+  try { await tagSheet(id); } catch {}
+  return id;
+}
+// Dopo il login: foglio già noto → carico (e ripeto il segno su Drive se era mancato); altrimenti lo cerco; nessuno → primo avvio.
+async function ensureSheet() {
+  if (sheetId()) {
+    const id = sheetId();
+    if (token() && store.get("ca-tagged") !== id) tagSheet(id).catch(() => {});
+    return loadAll();
+  }
+  if (S.finding) return;
+  if (!navigator.onLine) { S.error = { code: "offline" }; render(); return; }
+  if (!token()) { login(true); return; }
+  S.finding = true; S.error = null; render();
+  try {
+    const id = await findSheet();
+    if (id) { store.set("ca-sheet", id); store.set("ca-tagged", id); S.firstRun = false; }
+    else S.firstRun = true;
+  } catch (e) {
+    if (e instanceof AuthError) { S.finding = false; login(true); return; }
+    S.error = e;
+  } finally { S.finding = false; render(); }
+  if (sheetId()) loadAll();
+}
+// Un foglio che questo account non vede (altro account, foglio cestinato) si dimentica e si cerca di nuovo.
+// Una volta sola per foglio: se anche quello ritrovato non si apre, resta l'errore con "Riprova".
+const lostSheets = new Set();
+function forgetSheet() {
+  store.del("ca-sheet"); store.del("ca-cache"); store.del("ca-tagged"); // la coda ca-queue resta: partirà sul foglio giusto
+  S.mov = []; S.conti = []; S.totale = 0; S.pac = []; S.set = CORE.parseSettings([]); S.loadedAt = null;
 }
 let reloadAfter = false;
 async function loadAll() {
@@ -147,6 +200,11 @@ async function loadAll() {
     store.set("ca-cache", { raw, at: S.loadedAt });
   } catch (e) {
     if (e instanceof AuthError) { S.loading = false; spin(false); login(true); return; }
+    const id = sheetId();
+    if ((e.code === "forbidden" || e.code === "notfound") && id && !lostSheets.has(id)) {
+      lostSheets.add(id); forgetSheet(); S.error = null; reloadAfter = false;
+      S.loading = false; spin(false); ensureSheet(); return;
+    }
     S.error = e;
   } finally {
     S.loading = false; spin(false); render();
@@ -199,7 +257,8 @@ async function flush() {
         Q.remove(it.id); sent++;
       } catch (e) {
         if (e instanceof AuthError) { flushing = false; login(true); return sent; }
-        if (e.code !== "offline") { it.error = e.message; Q.put(it); }
+        // Foglio non raggiungibile: non è colpa del movimento, resta in coda e loadAll ritrova il foglio.
+        if (e.code !== "offline" && e.code !== "forbidden" && e.code !== "notfound") { it.error = e.message; Q.put(it); }
         break;
       }
     }
@@ -352,10 +411,7 @@ function banner() {
   }
   if (e.code === "config") msg = "Manca il Client ID di Google in config.js. Segui la guida per crearlo e incollalo nel file.";
   else if (e.code === "offline") msg = S.mov.length ? "Sei offline: vedi gli ultimi dati scaricati." : "Sei offline e non ho ancora dati salvati sul telefono.";
-  else if (e.code === "forbidden") msg = "Google non permette a questo account di aprire il foglio. Accedi con l'account proprietario del foglio.";
-  else if (e.code === "notfound") {
-    return `<div class="banner" role="alert"><span>Non trovo il foglio collegato. Controlla di aver incollato il link giusto.</span><button class="btn ghost" id="changeSheet">Cambia foglio</button></div>`;
-  }
+  else if (e.code === "forbidden" || e.code === "notfound") msg = "Non riesco ad aprire il tuo foglio con questo account Google. Riprova; se continua, esci e accedi con l'account con cui l'hai creato.";
   else if (e.code === "access_denied") msg = "Non hai dato il permesso di usare il foglio. Senza, l'app non può leggere i dati.";
   else msg = "Il foglio non ha risposto: " + esc(e.message || "errore sconosciuto") + ".";
   if (e.code !== "config") action = `<button class="btn ghost" id="retry">Riprova</button>`;
@@ -364,44 +420,46 @@ function banner() {
 
 /* ---------- schermate ---------- */
 function vWelcome() {
-  const setup = !sheetId();
+  const logged = !!token();
+  let body;
+  if (!logged) body = `<button class="gbtn" id="loginBtn">${ICON.google}Accedi con Google</button>
+    <span class="sub">L'app vede solo il foglio che crea lei nel tuo Google Drive. I dati restano nel tuo account.</span>`;
+  else if (S.finding) body = `<span class="sub" role="status">Cerco il tuo foglio…</span>`;
+  else if (S.creating) body = `<span class="sub" role="status">Sto preparando il tuo foglio…</span>`;
+  else if (S.firstRun) body = vFirstRun();
+  else body = S.error ? "" : `<button class="btn" id="findBtn">Cerca il mio foglio</button>`;
   return `<section class="welcome">
     <img class="logo" src="icons/icon-192.png" alt="">
     <div class="stack" style="gap:8px"><h1 class="h1" style="font-size:32px">Mio Contabile</h1>
       <span class="sub" style="font-size:15px">Spese, entrate, conti e PAC, salvati nel tuo foglio Google.</span></div>
     ${S.error && S.error.code !== "reauth" ? banner() : ""}
-    ${setup ? `<form id="setupForm" class="stack" style="gap:14px" novalidate>
-      <div class="field"><label for="sheetUrl">Link del tuo foglio Google</label>
-        <input class="inp" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/…" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url"></div>
-      <div class="field"><label for="nomeIn">Come ti chiami? (facoltativo)</label>
-        <input class="inp" id="nomeIn" autocomplete="given-name"></div>
-      <span class="err" id="setupErr" role="alert"></span>
-      <button class="gbtn" type="submit">${ICON.google}Continua con Google</button>
-    </form>
-    <span class="sub">Link e nome restano salvati solo su questo telefono. Il link lo copi dal foglio con Condividi → Copia link.</span>`
-    : `<button class="gbtn" id="loginBtn">${ICON.google}Accedi con Google</button>
-    <span class="sub">L'app chiede solo il permesso di leggere e modificare i tuoi fogli Google. I dati restano nel tuo account.</span>`}
+    ${body}
   </section>`;
 }
-function parseSheet(v) {
-  const s = String(v || "").trim();
-  const m = s.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]{20,})/) || s.match(/^([a-zA-Z0-9_-]{30,})$/);
-  return m ? m[1] : null;
+// Primo avvio provvisorio: il percorso guidato completo (conti, tipologie) arriva con il Task 5.
+function vFirstRun() {
+  return `<form id="firstForm" class="stack" style="gap:14px" novalidate>
+      <span class="sub">Non ho trovato un tuo foglio: lo creo adesso nel tuo Google Drive.</span>
+      <div class="field"><label for="nomeIn">Come ti chiami?</label>
+        <input class="inp" id="nomeIn" autocomplete="given-name" value="${esc(nome())}"></div>
+      <span class="err" id="firstErr" role="alert"></span>
+      <button class="btn" type="submit">Crea il foglio</button>
+    </form>`;
 }
-function submitSetup(ev) {
+async function submitFirstRun(ev) {
   ev.preventDefault();
-  const id = parseSheet($("#sheetUrl").value);
-  if (!id) { $("#setupErr").textContent = "Non riconosco il link: deve iniziare con docs.google.com/spreadsheets/d/…"; return; }
-  store.set("ca-sheet", id);
-  const n = $("#nomeIn").value.trim(); if (n) store.set("ca-nome", n); else store.del("ca-nome");
-  S.error = null;
-  login(false);
-}
-function changeSheet() {
-  if (Q.all().length) { toast("Prima invia i movimenti in attesa, poi cambia foglio."); return; }
-  store.del("ca-sheet"); store.del("ca-cache"); store.del("ca-known");
-  S.mov = []; S.conti = []; S.totale = 0; S.pac = []; S.loadedAt = null; S.error = null;
-  render();
+  const n = $("#nomeIn").value.trim();
+  if (!n) { $("#firstErr").textContent = "Scrivi un nome."; return; }
+  store.set("ca-nome", n);
+  S.creating = true; S.error = null; render();
+  try {
+    await createSheet({ nome: n, conti: [{ nome: "Contanti", iniziale: 0 }, { nome: "Banca", iniziale: 0 }], spesa: ["Spesa", "Pasti", "Svago"], entrata: ["Stipendio", "Altro"], colore: "verde" });
+    S.firstRun = false;
+  } catch (e) {
+    if (e instanceof AuthError) { S.creating = false; login(true); return; }
+    S.error = e;
+  } finally { S.creating = false; render(); }
+  if (sheetId()) loadAll();
 }
 // Andamento del patrimonio: si parte dal saldo di oggi e si tolgono, giorno per giorno all'indietro, i movimenti dei conti liquidi.
 // I trasferimenti verso l'ETF abbassano la liquidità, come nel totale. Con le cifre nascoste resta solo la forma della linea.
@@ -659,9 +717,8 @@ function vPac() {
     </details>
   </section>
   <section class="card">
-    <details class="more"><summary>Foglio e account<span>cambia foglio, esci</span></summary>
+    <details class="more"><summary>Account<span>esci</span></summary>
       <div class="stack" style="gap:10px">
-        <button class="btn ghost" id="changeSheetAsk" data-ask="Tocca ancora per cambiare foglio">Cambia foglio</button>
         <button class="btn danger" id="logoutAsk" data-ask="Tocca ancora per uscire">Esci dall'account Google</button>
         <span class="sub" id="ver"></span>
       </div>
@@ -689,7 +746,7 @@ function spin(on) { const b = $("#refresh"); if (b) b.classList.toggle("spin", o
 function bind() {
   const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn); };
   on("#loginBtn", "click", () => login(false));
-  on("#retry", "click", () => { S.error = null; loadAll(); });
+  on("#retry", "click", () => { S.error = null; lostSheets.clear(); ensureSheet(); });
   on("#refresh", "click", () => loadAll());
   on("#toggleHide", "click", () => { if (store.get("ca-show")) store.del("ca-show"); else store.set("ca-show", true); render(); });
   on("#prevM", "click", () => { S.movMonth = addMonths(S.movMonth, -1); render(); });
@@ -710,7 +767,7 @@ function bind() {
   on("#valForm", "submit", saveVal);
   on("#logout", "click", logout);
   // Azioni che cancellano la copia sul telefono: il secondo tocco conferma, la richiesta scade dopo 4 secondi.
-  [["#changeSheetAsk", changeSheet], ["#logoutAsk", logout]].forEach(([sel, fn]) => {
+  [["#logoutAsk", logout]].forEach(([sel, fn]) => {
     const b = $(sel); if (!b) return;
     b.addEventListener("click", () => {
       if (b.dataset.armed) { fn(); return; }
@@ -718,8 +775,8 @@ function bind() {
       setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = old; b.classList.remove("armed"); } }, 4000);
     });
   });
-  $$("#changeSheet").forEach(b => b.addEventListener("click", changeSheet)); // in PAC può comparirne due (avviso e fondo pagina)
-  on("#setupForm", "submit", submitSetup);
+  on("#firstForm", "submit", submitFirstRun);
+  on("#findBtn", "click", () => ensureSheet());
   on("#flushBtn", "click", () => { flush().then(() => loadAll()); });
   const dis = $("#discardBtn");
   if (dis) {
@@ -1083,7 +1140,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (Q.all().length || (S.loadedAt && Date.now() - S.loadedAt > 5 * 60 * 1000)) loadAll();
 });
-window.addEventListener("online", () => { if (S.error && S.error.code === "offline") S.error = null; render(); loadAll(); });
+window.addEventListener("online", () => { if (S.error && S.error.code === "offline") S.error = null; render(); if (token() || sheetId()) ensureSheet(); });
 window.addEventListener("offline", () => render());
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
@@ -1099,6 +1156,6 @@ if (r && r.error) {
 }
 render();
 store.del("ca-draft");
-if (token()) loadAll();
-else if (sheetId() && store.get("ca-known") && !(r && r.error) && navigator.onLine) login(true);
+if (token()) ensureSheet();
+else if (store.get("ca-known") && !(r && r.error) && navigator.onLine) login(true);
 })();

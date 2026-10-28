@@ -95,3 +95,59 @@ test("parseInputAmount invariato", () => {
   assert.ok(Number.isNaN(C.parseInputAmount("-5")));
   assert.equal(C.SHEET.mov, 100);
 });
+
+// Valori semplici di una riga di GridData (come li rileggerebbe l'app).
+const cellVal = c => { const v = (c && c.userEnteredValue) || {}; return v.stringValue ?? v.numberValue ?? v.formulaValue ?? v.boolValue ?? ""; };
+const gridRows = sh => sh.data[0].rowData.map(r => (r.values || []).map(cellVal));
+const createInput = () => ({ nome: "Marco", conti: [{ nome: "Contanti", iniziale: 50 }, { nome: "Banca", iniziale: -12.3 }], spesa: ["Spesa", "Pasti"], entrata: ["Stipendio"], colore: "blu" });
+
+test("buildCreateBody: titolo, locale e fogli con gli sheetId giusti", () => {
+  const b = C.buildCreateBody(createInput());
+  assert.equal(b.properties.title, "Contabile – Marco");
+  assert.equal(b.properties.locale, "it_IT");
+  assert.equal(b.properties.timeZone, "Europe/Rome");
+  assert.deepEqual(b.sheets.map(s => [s.properties.sheetId, s.properties.title]),
+    [[100, "Movimenti"], [200, "Conti"], [300, "Riepilogo"], [400, "PAC"], [500, "Impostazioni"]]);
+  assert.ok(b.sheets.every(s => s.properties.gridProperties.frozenRowCount === 1));
+});
+
+test("buildCreateBody: intestazioni di Movimenti e PAC", () => {
+  const b = C.buildCreateBody(createInput());
+  assert.deepEqual(gridRows(b.sheets[0])[0], ["Data", "Tipo", "Tipologia", "Importo", "Categoria", "Conto", "Descrizione"]);
+  assert.deepEqual(gridRows(b.sheets[3])[0], ["Data", "ETF", "Importo", "Quote", "Prezzo per quota", "Note"]);
+});
+
+test("buildCreateBody: Impostazioni rilette con parseSettings", () => {
+  const imp = C.buildCreateBody(createInput()).sheets[4];
+  assert.equal(imp.properties.gridProperties.rowCount, 60);
+  assert.equal(imp.properties.gridProperties.columnCount, 13);
+  const rows = gridRows(imp);
+  assert.equal(rows.length, 60);
+  assert.deepEqual(rows[0], ["Conto", "Saldo iniziale", "Nel totale", "Nascosto", "", "Tipologia spesa", "Nascosta", "", "Tipologia entrata", "Nascosta", "", "Chiave", "Valore"]);
+  const s = C.parseSettings(rows);
+  assert.deepEqual(s.conti, [{ nome: "Contanti", iniziale: 50, totale: true, nascosto: false }, { nome: "Banca", iniziale: -12.3, totale: true, nascosto: false }]);
+  assert.deepEqual(s.spesa, [{ nome: "Spesa", nascosta: false }, { nome: "Pasti", nascosta: false }]);
+  assert.deepEqual(s.entrata, [{ nome: "Stipendio", nascosta: false }]);
+  assert.equal(s.kv.nome, "Marco");
+  assert.equal(s.kv.colore, "blu");
+  assert.equal(s.kv.pac, false);
+});
+
+test("buildCreateBody: formule di Conti e Riepilogo in A1", () => {
+  const b = C.buildCreateBody(createInput());
+  for (const i of [1, 2]) {
+    const f = b.sheets[i].data[0].rowData[0].values[0].userEnteredValue.formulaValue;
+    assert.ok(typeof f === "string" && f.startsWith("="), b.sheets[i].properties.title);
+  }
+  assert.ok(b.sheets[1].data[0].rowData[0].values[0].userEnteredValue.formulaValue.includes('SUM(FILTER(s;t="SI"))'));
+});
+
+test("buildFormatRequests: date, euro e mesi sulle colonne giuste", () => {
+  const reqs = C.buildFormatRequests();
+  const f = (id, col) => reqs.find(r => r.repeatCell.range.sheetId === id && r.repeatCell.range.startColumnIndex === col);
+  assert.equal(f(100, 0).repeatCell.cell.userEnteredFormat.numberFormat.pattern, "dd/mm/yyyy");
+  assert.equal(f(100, 3).repeatCell.cell.userEnteredFormat.numberFormat.pattern, "#,##0.00 €");
+  assert.equal(f(400, 0).repeatCell.cell.userEnteredFormat.numberFormat.pattern, "dd/mm/yyyy");
+  assert.equal(f(400, 2).repeatCell.cell.userEnteredFormat.numberFormat.pattern, "#,##0.00 €");
+  assert.equal(f(300, 0).repeatCell.cell.userEnteredFormat.numberFormat.pattern, "mmmm yyyy");
+});
