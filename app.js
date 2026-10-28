@@ -1,7 +1,9 @@
 (() => {
 "use strict";
 const CFG = window.MC_CONFIG || {};
-const { parseInputAmount, SHEET } = window.CA_CORE;
+const CORE = window.CA_CORE;
+const { parseInputAmount, SHEET } = CORE;
+const CATEGORIE = ["Bisogno", "Desiderio"];
 // Il foglio e il nome non sono nel codice: si inseriscono al primo avvio e restano sul telefono.
 const sheetId = () => store.get("ca-sheet");
 const nome = () => store.get("ca-nome") || "";
@@ -60,8 +62,8 @@ const shortDay = d => d.getDate() + " " + MESI_B[d.getMonth()];
 /* ---------- stato ---------- */
 const S = {
   tab: "home", loading: false, loadedAt: null, error: null,
-  mov: [], conti: [], pac: [],
-  set: { spesa: [], entrata: [], conti: [], categorie: ["Bisogno", "Desiderio"], etf: [], giorno: 15, contoDa: "", contoInv: "" },
+  mov: [], conti: [], totale: 0, pac: [],
+  set: CORE.parseSettings([]),
   movMonth: monthStart(new Date()), movFilter: "tutti", movQuery: "",
   chartMonth: monthStart(new Date()),
   pacForm: false, valForm: false,
@@ -105,7 +107,7 @@ function logout() {
   const t = store.get("ca-token");
   store.del("ca-token"); store.del("ca-cache"); store.del("ca-known");
   if (t) fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(t.value), { method: "POST" }).catch(() => {});
-  S.mov = []; S.conti = []; S.pac = []; S.loadedAt = null;
+  S.mov = []; S.conti = []; S.totale = 0; S.pac = []; S.loadedAt = null;
   render();
 }
 
@@ -136,10 +138,10 @@ async function loadAll() {
   try {
     await flush();
     if (!token()) return;
-    const ranges = ["Movimenti!A2:G", "Conti!A2:E8", "Impostazioni!A1:J40", "PAC!A2:F"].map(r => "ranges=" + encodeURIComponent(r)).join("&");
+    const ranges = ["Movimenti!A2:G", "Impostazioni!A1:M60", "PAC!A2:F"].map(r => "ranges=" + encodeURIComponent(r)).join("&");
     const p = await api("/values:batchGet?" + ranges + "&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER");
-    const [mov, conti, imp, pac] = p.valueRanges.map(v => v.values || []);
-    const raw = { mov, conti, imp, pac };
+    const [mov, imp, pac] = p.valueRanges.map(v => v.values || []);
+    const raw = { mov, imp, pac };
     apply(raw);
     S.error = null; S.loadedAt = Date.now();
     store.set("ca-cache", { raw, at: S.loadedAt });
@@ -151,25 +153,20 @@ async function loadAll() {
     if (reloadAfter) { reloadAfter = false; loadAll(); }
   }
 }
-function apply({ mov, conti, imp, pac }) {
+function apply({ mov, imp, pac }) {
   S.mov = mov.map((r, i) => ({ row: i + 2, d: toDate(r[0]), tipo: r[1] || "", tip: r[2] || "", imp: num(r[3]), cat: r[4] || "", conto: r[5] || "", desc: r[6] || "" }))
     .filter(m => m.d && m.imp);
-  S.conti = conti.filter(r => r[0] && r[0] !== "Totale").map(r => ({ nome: r[0], saldo: num(r[4]) }));
-  const col = i => imp.slice(1).map(r => r[i]).filter(v => v !== undefined && v !== "");
-  if (imp.length) {
-    S.set.spesa = col(0); S.set.entrata = col(1); S.set.conti = col(2);
-    if (col(3).length) S.set.categorie = col(3);
-    S.set.etf = imp.slice(1, 3).filter(r => r[5]).map(r => ({ nome: r[5], isin: r[6] || "", mensile: num(r[7]), valore: r[8] === undefined || r[8] === "" ? null : num(r[8]), agg: r[9] ? toDate(r[9]) : null }));
-    if (parseInt(imp[5]?.[7], 10)) S.set.giorno = parseInt(imp[5][7], 10);
-    if (imp[6]?.[7]) S.set.contoDa = imp[6][7];
-    if (imp[7]?.[7]) S.set.contoInv = imp[7][7];
-    // Righe 9 e 10 di Impostazioni: quote possedute (le scrivi tu) e prezzo per quota (formula Google Finance).
-    const q = imp[8]?.[7], pr = imp[9]?.[7];
-    S.set.quote = q === undefined || q === "" ? null : num(q);
-    S.set.prezzo = pr === undefined || pr === "" || typeof pr === "string" && pr.startsWith("#") ? null : num(pr);
-  }
-  if (!S.set.conti.length) S.set.conti = S.conti.map(c => c.nome);
+  S.set = CORE.parseSettings(imp);
+  const b = CORE.computeBalances(S.mov, S.set);
+  S.conti = b.conti; S.totale = b.totale;
   S.pac = pac.map(r => ({ d: toDate(r[0]), etf: r[1] || "", imp: num(r[2]), quote: r[3] === "" || r[3] === undefined ? null : num(r[3]) })).filter(p => p.d && p.imp);
+}
+// L'ETF del piano di accumulo, ricavato dalle impostazioni (per ora uno solo; la schermata PAC viene rifatta più avanti).
+function pacEtf() {
+  const k = S.set.kv;
+  if (!k.etf) return [];
+  const valore = k.quote != null && k.prezzo != null ? Math.round(k.quote * k.prezzo * 100) / 100 : null;
+  return [{ nome: k.etf, isin: "", mensile: k.importo_pac, valore, agg: null }];
 }
 const append = (range, values) => api("/values/" + encodeURIComponent(range) + ":append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS", { method: "POST", body: JSON.stringify({ values }) });
 
@@ -230,7 +227,7 @@ function pendingBanner() {
 
 // Se sul conto del PAC c'è meno della rata mensile, il prossimo versamento non può partire: avviso di ricaricare.
 function pacWarn() {
-  const plan = S.set.etf.reduce((a, e) => a + e.mensile, 0), da = S.set.contoDa;
+  const plan = pacEtf().reduce((a, e) => a + e.mensile, 0), da = S.set.kv.conto_pac;
   const c = S.conti.find(x => x.nome === da);
   if (!plan || !c || c.saldo >= plan) return "";
   const np = nextPac(), hide = isHidden();
@@ -403,7 +400,7 @@ function submitSetup(ev) {
 function changeSheet() {
   if (Q.all().length) { toast("Prima invia i movimenti in attesa, poi cambia foglio."); return; }
   store.del("ca-sheet"); store.del("ca-cache"); store.del("ca-known");
-  S.mov = []; S.conti = []; S.pac = []; S.loadedAt = null; S.error = null;
+  S.mov = []; S.conti = []; S.totale = 0; S.pac = []; S.loadedAt = null; S.error = null;
   render();
 }
 // Andamento del patrimonio: si parte dal saldo di oggi e si tolgono, giorno per giorno all'indietro, i movimenti dei conti liquidi.
@@ -473,9 +470,10 @@ function bindScrub() {
 function vHome() {
   const now = new Date();
   // Il conto investimenti (ETF) non entra nel patrimonio e non compare in Home: si vede nella schermata PAC.
-  const inv = S.set.contoInv;
+  const inv = S.set.kv.conto_inv;
   const liquid = S.conti.filter(c => c.nome !== inv);
-  const tot = liquid.reduce((a, c) => a + c.saldo, 0);
+  const counted = liquid.filter(c => c.totale);
+  const tot = S.totale;
   const st = stats(now);
   const spT = st.bis + st.des, pb = spT ? st.bis / spT * 100 : 0;
   const recent = byDateDesc(pairTransfers(byDateDesc(S.mov.concat(pendingMov())).slice(0, 12))).slice(0, 4);
@@ -494,9 +492,9 @@ function vHome() {
   <section class="hero" aria-label="Patrimonio">
     <div class="top" style="align-items:flex-start"><div class="stack"><span class="eyebrow">Patrimonio</span>
       <span class="big">${liquid.length ? money(tot) : "—"}</span>
-      <span class="sub">su ${liquid.length} conti${time ? " · aggiornato alle " + time : ""}</span></div>
+      <span class="sub">su ${counted.length} ${counted.length === 1 ? "conto" : "conti"}${time ? " · aggiornato alle " + time : ""}</span></div>
       <button class="eye" id="toggleHide" aria-pressed="${hide}" aria-label="${hide ? "Mostra le cifre" : "Nascondi le cifre"}">${hide ? ICON.eyeOff : ICON.eye}</button></div>
-    ${trendHtml(new Set(liquid.map(c => c.nome)), tot)}
+    ${trendHtml(new Set(counted.map(c => c.nome)), tot)}
     ${hide ? "" : `<div class="tiles">${liquid.slice().sort((a, b) => b.saldo - a.saldo).map(c => `<div class="tile"><span>${esc(c.nome)}</span><b>${money(c.saldo)}</b></div>`).join("")}</div>`}
   </section>
   <section class="card">
@@ -589,12 +587,12 @@ function vCharts() {
 }
 function nextPac() {
   const t = new Date(); t.setHours(0, 0, 0, 0);
-  let d = new Date(t.getFullYear(), t.getMonth(), S.set.giorno);
-  if (d < t) d = new Date(t.getFullYear(), t.getMonth() + 1, S.set.giorno);
+  let d = new Date(t.getFullYear(), t.getMonth(), S.set.kv.giorno_pac);
+  if (d < t) d = new Date(t.getFullYear(), t.getMonth() + 1, S.set.kv.giorno_pac);
   return { d, days: Math.round((d - t) / 864e5) };
 }
 function vPac() {
-  const etf = S.set.etf, plan = etf.reduce((a, e) => a + e.mensile, 0);
+  const etf = pacEtf(), plan = etf.reduce((a, e) => a + e.mensile, 0);
   const vers = n => S.pac.filter(p => p.etf === n).reduce((a, p) => a + p.imp, 0);
   const totV = S.pac.reduce((a, p) => a + p.imp, 0);
   const hasVal = etf.some(e => e.valore != null);
@@ -606,16 +604,16 @@ function vPac() {
   const single = etf.length === 1; // con un solo ETF la ripartizione e le ripetizioni non dicono niente
   const hist = byDateDesc(S.pac.map((p, i) => ({ ...p, row: i }))).slice(0, 12);
   return `
-  <div class="top"><div class="stack"><span class="eyebrow">Piano di accumulo · ${esc(S.set.contoDa)}</span><h1 class="h1">PAC</h1></div></div>
+  <div class="top"><div class="stack"><span class="eyebrow">Piano di accumulo · ${esc(S.set.kv.conto_pac)}</span><h1 class="h1">PAC</h1></div></div>
   ${banner()}
   ${pacWarn()}
   <section class="hero" aria-label="Prossimo versamento">
     <div class="stack"><span class="eyebrow">Prossimo versamento</span>
       <span class="big" style="font-size:34px;line-height:1.1">${np.d.getDate()} ${MESI[np.d.getMonth()]}</span>
-      <span class="sub">${np.days === 0 ? "oggi" : np.days === 1 ? "domani" : "tra " + np.days + " giorni"} · ${M(plan)} da ${esc(S.set.contoDa)}</span></div>
+      <span class="sub">${np.days === 0 ? "oggi" : np.days === 1 ? "domani" : "tra " + np.days + " giorni"} · ${M(plan)} da ${esc(S.set.kv.conto_pac)}</span></div>
     <div class="tiles two">
-      <div class="tile"><span>${hasVal ? "Valore attuale" : "Conto " + esc(S.set.contoInv)}</span><b>${hasVal ? M(totVal) : (bal(S.set.contoInv) != null ? M(bal(S.set.contoInv)) : "—")}</b></div>
-      <div class="tile"><span>${hasVal ? "Versato" : "Liquidità " + esc(S.set.contoDa)}</span><b>${hasVal ? M(totV) : (bal(S.set.contoDa) != null ? M(bal(S.set.contoDa)) : "—")}</b></div>
+      <div class="tile"><span>${hasVal ? "Valore attuale" : "Conto " + esc(S.set.kv.conto_inv)}</span><b>${hasVal ? M(totVal) : (bal(S.set.kv.conto_inv) != null ? M(bal(S.set.kv.conto_inv)) : "—")}</b></div>
+      <div class="tile"><span>${hasVal ? "Versato" : "Liquidità " + esc(S.set.kv.conto_pac)}</span><b>${hasVal ? M(totV) : (bal(S.set.kv.conto_pac) != null ? M(bal(S.set.kv.conto_pac)) : "—")}</b></div>
     </div>
   </section>
   <section class="card">
@@ -624,13 +622,13 @@ function vPac() {
       <div class="row"><span class="nm">${esc(e.nome)}</span><b style="white-space:nowrap">${M0(e.mensile)}/mese</b></div>
       ${single ? (e.isin ? `<div class="row sub"><span>${esc(e.isin)}</span></div>` : "") : `<div class="row sub"><span>${esc(e.isin || "")}${e.isin ? " · " : ""}versato ${M(v)}</span><span>${plan ? Math.round(e.mensile / plan * 100) : 0}%</span></div>`}
       ${e.valore != null ? `<div class="row sub"><span>valore ${M(e.valore)}</span><span class="${e.valore - v >= 0 ? "pos" : ""}">${e.valore - v >= 0 ? "+" : ""}${M(e.valore - v)}</span></div>` : ""}
-      ${i === 0 && S.set.quote != null ? `<div class="row sub"><span>${S.set.quote.toLocaleString("it-IT", { maximumFractionDigits: 6 })} quote${S.set.prezzo != null ? " · " + M(S.set.prezzo) + " a quota (Google Finance)" : ""}</span></div>` : ""}
+      ${i === 0 && S.set.kv.quote != null ? `<div class="row sub"><span>${S.set.kv.quote.toLocaleString("it-IT", { maximumFractionDigits: 6 })} quote${S.set.kv.prezzo != null ? " · " + M(S.set.kv.prezzo) + " a quota (Google Finance)" : ""}</span></div>` : ""}
     </div>`; }).join("") || `<span class="empty">Aggiungi gli ETF nel foglio Impostazioni.</span>`}
     ${etf.length > 1 ? `<div class="split">${etf.map((e, i) => `<i style="width:${plan ? e.mensile / plan * 100 : 0}%;background:var(${colors[i] || "--muted"})"></i>`).join("")}</div>
     <div class="legend">${etf.map((e, i) => `<span><i class="sw" style="background:var(${colors[i] || "--muted"})"></i>${labels[i] || esc(e.nome)}</span>`).join("")}</div>` : ""}
     <button class="btn ghost" id="toggleVal">${S.valForm ? "Chiudi" : "Aggiorna quote possedute"}</button>
     ${S.valForm ? `<form id="valForm" class="stack" style="gap:12px">
-      <div class="field"><label for="quoteIn">Quote totali che vedi su ${esc(S.set.contoDa || "il broker")}</label><input class="inp" id="quoteIn" inputmode="decimal" placeholder="es. 1,164669" value="${S.set.quote != null ? S.set.quote.toLocaleString("it-IT", { maximumFractionDigits: 6 }) : ""}"></div>
+      <div class="field"><label for="quoteIn">Quote totali che vedi su ${esc(S.set.kv.conto_pac || "il broker")}</label><input class="inp" id="quoteIn" inputmode="decimal" placeholder="es. 1,164669" value="${S.set.kv.quote != null ? S.set.kv.quote.toLocaleString("it-IT", { maximumFractionDigits: 6 }) : ""}"></div>
       <span class="sub" style="font-size:13px">Il valore si calcola da solo: quote × prezzo di oggi.</span>
       <span class="err" id="valErr" role="alert"></span>
       <button class="btn" type="submit" id="valSave">Salva quote</button></form>` : ""}
@@ -648,7 +646,7 @@ function vPac() {
       ${etf.map((e, i) => `<div class="field"><span class="lab">${esc(e.nome)}</span><div class="pair" style="grid-template-columns:1fr 1fr">
         <input class="inp" id="pacAmt${i}" inputmode="decimal" value="${fmt2(e.mensile)}" aria-label="Importo ${esc(e.nome)}">
         <input class="inp" id="pacQ${i}" inputmode="decimal" placeholder="quote, se le sai" aria-label="Quote ${esc(e.nome)}"></div></div>`).join("")}
-      <label class="check"><input type="checkbox" id="pacTr" checked><span>Registra anche il trasferimento ${esc(S.set.contoDa)} → ${esc(S.set.contoInv)}, così i saldi dei conti restano giusti</span></label>
+      <label class="check"><input type="checkbox" id="pacTr" checked><span>Registra anche il trasferimento ${esc(S.set.kv.conto_pac)} → ${esc(S.set.kv.conto_inv)}, così i saldi dei conti restano giusti</span></label>
       <span class="err" id="pacErr" role="alert"></span>
       <button class="btn" type="submit" id="pacSave">Salva versamento</button></form>` : ""}
   </section>
@@ -816,23 +814,27 @@ function chips(list, cur, key, extra = "") {
   return `<div class="chips">${list.map(v => `<button type="button" class="chip" data-k="${key}" data-v="${esc(v)}" aria-pressed="${v === cur}">${esc(v)}</button>`).join("")}${extra}</div>`;
 }
 function fields() {
-  const tutti = S.set.conti.length ? S.set.conti : S.conti.map(c => c.nome);
-  // ETF e il conto del broker si usano solo nei trasferimenti: non ci si paga né ci si riceve uno stipendio.
-  const fuori = c => c === S.set.contoInv || c === S.set.contoDa;
+  // Conti nascosti fuori dalle scelte; il conto degli investimenti si usa solo nei trasferimenti (non ci si paga né ci si riceve uno stipendio).
+  const nascosti = new Set(S.conti.filter(c => c.nascosto).map(c => c.nome));
+  const inv = S.set.kv.conto_inv;
+  const tutti = S.conti.map(c => c.nome).filter(c => !nascosti.has(c));
+  const fuori = c => c === inv || nascosti.has(c);
   if (A.tipo !== "Trasferimento" && !EDIT && fuori(A.conto)) A.conto = ""; // l'ultimo conto usato può essere uno di quelli esclusi
-  const conti = A.tipo === "Trasferimento" ? tutti : tutti.filter(c => !fuori(c) || (EDIT && c === A.conto));
+  // In Modifica, una voce nascosta già usata dal movimento resta visibile e selezionata (lo fa chips()).
+  const conti = A.tipo === "Trasferimento" ? tutti : tutti.filter(c => c !== inv);
+  const visibili = l => l.filter(v => !v.nascosta).map(v => v.nome);
   let h = "", h2 = "", mesi = "";
   if (A.tipo === "Spesa") {
-    const tl = recentFirst(S.set.spesa, "Spesa"), lungo = tl.length > 6;
+    const tl = recentFirst(visibili(S.set.spesa), "Spesa"), lungo = tl.length > 6;
     const vis = A.tipAll || !lungo ? tl : tl.slice(0, 5).concat(A.tip && !tl.slice(0, 5).includes(A.tip) ? [A.tip] : []);
     const altre = lungo ? `<button type="button" class="chip more" data-act="tipAll" aria-expanded="${!!A.tipAll}">${A.tipAll ? "Meno" : "Altre " + (tl.length - vis.length)}</button>` : "";
     h += `<div class="field"><span class="lab">Pagato con</span>${chips(conti, A.conto, "conto")}</div>`;
     h += `<div class="field"><span class="lab">Tipologia</span>${chips(vis, A.tip, "tip", altre)}</div>`;
-    h2 += `<div class="field"><span class="lab">Bisogno o desiderio?</span><div class="seg two">${S.set.categorie.slice(0, 2).map((c, i) => `<button type="button" data-k="cat" data-v="${esc(c)}" aria-pressed="${A.cat === c}"><i class="sw ${i ? "des" : ""}" style="width:9px;height:9px;background:var(${i ? "--s2" : "--s1"})"></i>${esc(c)}</button>`).join("")}</div></div>`;
+    h2 += `<div class="field"><span class="lab">Bisogno o desiderio?</span><div class="seg two">${CATEGORIE.map((c, i) => `<button type="button" data-k="cat" data-v="${esc(c)}" aria-pressed="${A.cat === c}"><i class="sw ${i ? "des" : ""}" style="width:9px;height:9px;background:var(${i ? "--s2" : "--s1"})"></i>${esc(c)}</button>`).join("")}</div></div>`;
     mesi = `<div class="field"><span class="lab">Quanti mesi copre? (solo per i grafici)</span><div class="seg five">${(["1", "2", "3", "6", "12"].includes(A.mesi) ? ["1", "2", "3", "6", "12"] : ["1", "2", "3", "6", "12", A.mesi]).map(n => `<button type="button" data-k="mesi" data-v="${n}" aria-pressed="${A.mesi === n}">${n}</button>`).join("")}</div></div>`;
   } else if (A.tipo === "Entrata") {
     h += `<div class="field"><span class="lab">Arrivato su</span>${chips(conti, A.conto, "conto")}</div>`;
-    h += `<div class="field"><span class="lab">Da chi</span>${chips(recentFirst(S.set.entrata, "Entrata"), A.tip, "tip")}</div>`;
+    h += `<div class="field"><span class="lab">Da chi</span>${chips(recentFirst(visibili(S.set.entrata), "Entrata"), A.tip, "tip")}</div>`;
   } else {
     h += `<div class="field"><span class="lab">Da</span>${chips(conti, A.da, "da")}</div>`;
     h += `<div class="field"><span class="lab">A</span>${chips(conti, A.a, "a")}</div>`;
@@ -1021,7 +1023,7 @@ async function savePac(ev) {
   const d = $("#pacDate").value ? fromIso($("#pacDate").value) : new Date(), ds = sheetDate(d);
   const rows = [];
   let bad = "";
-  S.set.etf.forEach((e, i) => {
+  pacEtf().forEach((e, i) => {
     const aRaw = $("#pacAmt" + i).value.trim(), qRaw = $("#pacQ" + i).value.trim();
     const imp = parseInputAmount(aRaw), q = parseQuote(qRaw);
     // Un campo compilato ma non leggibile non si scarta in silenzio: si avvisa.
@@ -1033,7 +1035,7 @@ async function savePac(ev) {
   if (!rows.length) { err.textContent = "Inserisci almeno un importo."; return; }
   const tot = rows.reduce((a, r) => a + r[2], 0);
   const ops = [{ range: "PAC!A:F", rows }];
-  if ($("#pacTr").checked) ops.push({ range: "Movimenti!A:G", rows: [[ds, "Spesa", "Trasferimenti", tot, "Bisogno", S.set.contoDa, "PAC verso " + S.set.contoInv], [ds, "Entrata", "Trasferimenti", tot, "", S.set.contoInv, "PAC da " + S.set.contoDa]] });
+  if ($("#pacTr").checked) ops.push({ range: "Movimenti!A:G", rows: [[ds, "Spesa", "Trasferimenti", tot, "Bisogno", S.set.kv.conto_pac, "PAC verso " + S.set.kv.conto_inv], [ds, "Entrata", "Trasferimenti", tot, "", S.set.kv.conto_inv, "PAC da " + S.set.kv.conto_pac]] });
   // Lo passo sempre dalla coda: se la rete cade tra le due scritture, la seconda riparte senza ripetere la prima.
   const it = { id: newId(), ops, done: 0, at: Date.now() };
   Q.add(it);
@@ -1055,7 +1057,7 @@ async function saveVal(ev) {
   if (!(q > 0)) { err.textContent = "Scrivi il numero di quote, per esempio 1,164669."; return; }
   const btn = $("#valSave"); btn.disabled = true; btn.textContent = "Salvo…";
   try {
-    await api("/values/" + encodeURIComponent("Impostazioni!H9") + "?valueInputOption=RAW", { method: "PUT", body: JSON.stringify({ values: [[q]] }) });
+    await api("/values/" + encodeURIComponent("Impostazioni!M10") + "?valueInputOption=RAW", { method: "PUT", body: JSON.stringify({ values: [[q]] }) });
     S.valForm = false; toast("Quote aggiornate"); loadAll();
   } catch (e) {
     btn.disabled = false; btn.textContent = "Salva quote";
@@ -1088,7 +1090,7 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catc
 const r = handleRedirect();
 if (r && r.ok) store.set("ca-known", true);
 const cached = store.get("ca-cache");
-if (cached) { try { apply(cached.raw); S.loadedAt = cached.at; } catch {} }
+if (cached && cached.raw && cached.raw.imp) { try { apply(cached.raw); S.loadedAt = cached.at; } catch {} }
 if (r && r.error) {
   store.del("ca-token");
   // Rinnovo silenzioso non riuscito (sessione Google scaduta o più account): serve un accesso con un tocco.
