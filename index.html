@@ -16,6 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&display=swap">
+<script>try{var c=JSON.parse(localStorage.getItem("ca-colore"));if(c)document.documentElement.setAttribute("data-accent",c)}catch(e){}</script>
 <style>
 /* Layout: app a schermo intero; contenuto che scorre sopra una barra fissa in basso con il "+" rialzato; i moduli si aprono come fogli dal basso. */
 :root{
@@ -40,6 +41,21 @@
   --scrim:rgba(0,0,0,.6); --shadow:rgba(0,0,0,.45);
   color-scheme:dark;
 }}
+/* Colore principale a scelta: cambiano solo questi sei token (verde = valori di base sopra). */
+:root[data-accent="rosa"]{--accent:#C72A66; --accent-ink:#FFFFFF; --accent-soft:#F9D9E6; --on-accent-muted:#FDEBF2; --hero:#C72A66; --shadow:rgba(199,42,102,.30)}
+:root[data-accent="blu"]{--accent:#2459A8; --accent-ink:#FFFFFF; --accent-soft:#DCE7F7; --on-accent-muted:#E8F0FB; --hero:#2459A8; --shadow:rgba(36,89,168,.30)}
+:root[data-accent="viola"]{--accent:#6B3FB0; --accent-ink:#FFFFFF; --accent-soft:#E6DCF5; --on-accent-muted:#F1EAFB; --hero:#6B3FB0; --shadow:rgba(107,63,176,.30)}
+:root[data-accent="arancio"]{--accent:#B3470F; --accent-ink:#FFFFFF; --accent-soft:#FADFCC; --on-accent-muted:#FDEEE2; --hero:#B3470F; --shadow:rgba(179,71,15,.30)}
+@media (prefers-color-scheme: dark){
+:root[data-accent="rosa"]{--accent:#F07AA4; --accent-ink:#1A0A11; --accent-soft:#3A1827; --on-accent-muted:#FBE3EC; --hero:#A8204F; --shadow:rgba(0,0,0,.45)}
+:root[data-accent="blu"]{--accent:#7AA7EA; --accent-ink:#0A121C; --accent-soft:#1B2A40; --on-accent-muted:#E6EEFB; --hero:#2459A8; --shadow:rgba(0,0,0,.45)}
+:root[data-accent="viola"]{--accent:#B596EE; --accent-ink:#130B1E; --accent-soft:#2B2040; --on-accent-muted:#F0E9FB; --hero:#6B3FB0; --shadow:rgba(0,0,0,.45)}
+:root[data-accent="arancio"]{--accent:#EE9A62; --accent-ink:#1E0F05; --accent-soft:#3A2314; --on-accent-muted:#FDEBDD; --hero:#A4400E; --shadow:rgba(0,0,0,.45)}
+}
+.swatches{display:flex;flex-wrap:wrap;gap:6px}
+.swatch{width:44px;height:44px;border-radius:22px;border:2px solid transparent;background:transparent;display:grid;place-items:center;padding:0}
+.swatch i{display:block;width:28px;height:28px;border-radius:14px;background:var(--sw)}
+.swatch[aria-pressed="true"]{border-color:var(--fg)}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.4;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;font-variant-numeric:tabular-nums;overscroll-behavior-y:none}

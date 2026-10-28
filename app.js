@@ -25,6 +25,9 @@ const fmt2 = n => { const [i, d] = Math.abs(n).toFixed(2).split("."); return gro
 const eur = n => (n < 0 ? "−" : "") + "€ " + fmt2(n);
 const eur0 = n => (n < 0 ? "−" : "") + "€ " + group(String(Math.abs(Math.round(n))));
 const eurK = n => n >= 1000 ? "€ " + Math.round(n / 1000).toLocaleString("it-IT") + "k" : eur0(n);
+const COLORI = [["verde", "Verde", "#1E5C48"], ["rosa", "Rosa", "#C72A66"], ["blu", "Blu", "#2459A8"], ["viola", "Viola", "#6B3FB0"], ["arancio", "Arancio", "#B3470F"]];
+const coloreOk = c => COLORI.some(x => x[0] === c) ? c : "verde";
+const setAccent = c => document.documentElement.setAttribute("data-accent", coloreOk(c));
 const isHidden = () => !store.get("ca-show");
 const M = n => isHidden() ? "€ ••••" : eur(n);
 const M0 = n => isHidden() ? "€ ••••" : eur0(n);
@@ -221,6 +224,8 @@ function apply({ mov, imp, pac }) {
   S.mov = mov.map((r, i) => ({ row: i + 2, d: toDate(r[0]), tipo: r[1] || "", tip: r[2] || "", imp: num(r[3]), cat: r[4] || "", conto: r[5] || "", desc: r[6] || "" }))
     .filter(m => m.d && m.imp);
   S.set = CORE.parseSettings(imp);
+  const col = coloreOk(S.set.kv.colore);
+  setAccent(col); if (store.get("ca-colore") !== col) store.set("ca-colore", col);
   const b = CORE.computeBalances(S.mov, S.set);
   S.conti = b.conti; S.totale = b.totale;
   S.pac = pac.map(r => ({ d: toDate(r[0]), etf: r[1] || "", imp: num(r[2]), quote: r[3] === "" || r[3] === undefined ? null : num(r[3]) })).filter(p => p.d && p.imp);
@@ -938,7 +943,8 @@ function vSettings() {
   <section class="card"><span class="eyebrow">Nome</span>
     <div class="field"><label class="sr" for="cfgNome">Il tuo nome</label><input class="inp" id="cfgNome" maxlength="30" autocomplete="off" value="${esc(c.nome)}"></div></section>
   ${pacSection(c)}
-  <!-- Task 8: sezione Colore. -->
+  <section class="card"><span class="eyebrow">Colore</span>
+    <div class="swatches" role="group" aria-label="Colore principale">${COLORI.map(([id, nm, hex]) => `<button type="button" class="swatch" data-colore="${id}" style="--sw:${hex}" aria-label="${nm}" aria-pressed="${coloreOk(S.set.kv.colore) === id}"><i></i></button>`).join("")}</div></section>
   <div class="stack" style="gap:10px;padding-bottom:16px"><span class="err" id="cfgErr" role="alert">${esc(c.err)}</span>
     <button class="btn" type="button" id="cfgSave" ${c.saving ? "disabled" : ""}>${c.saving ? "Salvo…" : "Salva"}</button></div>`;
 }
@@ -998,7 +1004,18 @@ function bindSettings() {
     }
     if (act === "rm") cfgRemove(key, i);
   }));
+  $$("[data-colore]").forEach(b => b.addEventListener("click", () => pickColor(b.dataset.colore)));
   const save = $("#cfgSave"); if (save) save.addEventListener("click", cfgSave);
+}
+// Il colore si applica subito e si salva da solo (una sola cella), senza passare da "Salva".
+async function pickColor(id) {
+  id = coloreOk(id);
+  setAccent(id); store.set("ca-colore", id); S.set.kv.colore = id;
+  $$("[data-colore]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.colore === id)));
+  if (!navigator.onLine || !token()) { toast("Salvato su questo telefono"); return; }
+  try {
+    await api("/values/" + encodeURIComponent("Impostazioni!M" + CORE.kvRow("colore")) + "?valueInputOption=RAW", { method: "PUT", body: JSON.stringify({ values: [[id]] }) });
+  } catch (e) { toast("Salvato su questo telefono"); }
 }
 function cfgAddOk() {
   const c = S.cfg, key = c.adding; if (!key) return;
