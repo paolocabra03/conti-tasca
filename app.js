@@ -107,8 +107,13 @@ function handleRedirect() {
   return { ok: true };
 }
 function logout() {
+  // La coda di un account non deve finire nel foglio di un altro: prima si chiede.
+  const q = Q.all();
+  if (q.length && !confirm("Ci sono " + q.length + " movimenti non ancora salvati: se esci li perdi. Esci lo stesso?")) return;
   const t = store.get("ca-token");
+  store.del("ca-queue"); store.del("ca-sheet"); store.del("ca-nome"); store.del("ca-tagged");
   store.del("ca-token"); store.del("ca-cache"); store.del("ca-known");
+  S.firstRun = false; S.finding = false; S.creating = false; S.error = null; S.setup = newSetup();
   if (t) fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(t.value), { method: "POST" }).catch(() => {});
   S.mov = []; S.conti = []; S.totale = 0; S.pac = []; S.loadedAt = null;
   render();
@@ -166,7 +171,7 @@ async function ensureSheet() {
   try {
     const id = await findSheet();
     if (id) { store.set("ca-sheet", id); store.set("ca-tagged", id); S.firstRun = false; }
-    else S.firstRun = true;
+    else { S.firstRun = true; S.setup.step = Math.max(S.setup.step, 2); }
   } catch (e) {
     if (e instanceof AuthError) { S.finding = false; login(true); return; }
     S.error = e;
@@ -196,6 +201,7 @@ async function loadAll() {
     const [mov, imp, pac] = p.valueRanges.map(v => v.values || []);
     const raw = { mov, imp, pac };
     apply(raw);
+    if (!nome() && S.set.kv.nome) store.set("ca-nome", S.set.kv.nome); // foglio ritrovato su un telefono nuovo
     S.error = null; S.loadedAt = Date.now();
     store.set("ca-cache", { raw, at: S.loadedAt });
   } catch (e) {
@@ -421,45 +427,139 @@ function banner() {
 /* ---------- schermate ---------- */
 function vWelcome() {
   const logged = !!token();
+  const st = S.setup;
+  const inSetup = logged && !S.finding && (S.firstRun || S.creating);
+  if (inSetup && st.step >= 2) return `<section class="wizard">${vSetup()}</section>`;
   let body;
-  if (!logged) body = `<button class="gbtn" id="loginBtn">${ICON.google}Accedi con Google</button>
+  if (!logged) body = `<button class="gbtn" id="loginBtn">${ICON.google}Entra con Google</button>
+    <span class="sub">Google ti avviserà che l'app non è verificata: tocca "Avanzate" e poi "Vai a Contabile".</span>
     <span class="sub">L'app vede solo il foglio che crea lei nel tuo Google Drive. I dati restano nel tuo account.</span>`;
   else if (S.finding) body = `<span class="sub" role="status">Cerco il tuo foglio…</span>`;
-  else if (S.creating) body = `<span class="sub" role="status">Sto preparando il tuo foglio…</span>`;
-  else if (S.firstRun) body = vFirstRun();
+  else if (inSetup) body = `<button class="btn" data-setup="next">Continua</button>`;
   else body = S.error ? "" : `<button class="btn" id="findBtn">Cerca il mio foglio</button>`;
   return `<section class="welcome">
     <img class="logo" src="icons/icon-192.png" alt="">
-    <div class="stack" style="gap:8px"><h1 class="h1" style="font-size:32px">Mio Contabile</h1>
-      <span class="sub" style="font-size:15px">Spese, entrate, conti e PAC, salvati nel tuo foglio Google.</span></div>
+    <div class="stack" style="gap:8px"><h1 class="h1" style="font-size:32px">Contabile</h1>
+      <span class="sub" style="font-size:15px">Spese, entrate e conti, salvati in un foglio Google tutto tuo.</span></div>
     ${S.error && S.error.code !== "reauth" ? banner() : ""}
     ${body}
   </section>`;
 }
-// Primo avvio provvisorio: il percorso guidato completo (conti, tipologie) arriva con il Task 5.
-function vFirstRun() {
-  return `<form id="firstForm" class="stack" style="gap:14px" novalidate>
-      <span class="sub">Non ho trovato un tuo foglio: lo creo adesso nel tuo Google Drive.</span>
-      <div class="field"><label for="nomeIn">Come ti chiami?</label>
-        <input class="inp" id="nomeIn" autocomplete="given-name" value="${esc(nome())}"></div>
-      <span class="err" id="firstErr" role="alert"></span>
-      <button class="btn" type="submit">Crea il foglio</button>
-    </form>`;
+
+/* ---------- primo avvio: 5 passi (S.setup vive in memoria, non nel foglio) ---------- */
+const SETUP_CONTI = ["Contanti", "Banca", "PayPal", "Revolut", "Postepay"];
+const SETUP_SPESE = ["Spesa", "Benzina", "Pasti", "Treno", "Sport", "Regali", "Vestiti", "Svago", "Abbonamenti", "Viaggi", "Casa", "Salute"];
+const SETUP_ENTRATE = ["Stipendio", "Regali", "Rimborsi", "Altro"];
+const newSetup = () => ({
+  step: 1, nome: nome(), err: "", failed: false, adding: null, addText: "", addErr: "",
+  conti: SETUP_CONTI.map(n => ({ nome: n, on: false, iniz: "" })),
+  spesa: SETUP_SPESE.map(n => ({ nome: n, on: false })),
+  entrata: SETUP_ENTRATE.map(n => ({ nome: n, on: false })),
+});
+S.setup = newSetup();
+const setupChips = key => `<div class="chips">${S.setup[key].map((c, i) => `<button type="button" class="chip" data-sk="${key}" data-si="${i}" aria-pressed="${c.on}">${esc(c.nome)}</button>`).join("")}${S.setup.adding === key ? "" : `<button type="button" class="chip more" data-sadd="${key}">+ Aggiungi</button>`}</div>`;
+const setupAddRow = key => S.setup.adding !== key ? "" : `<div class="addrow"><div class="field"><label for="addIn" class="sr">Nome</label>
+    <input class="inp" id="addIn" maxlength="40" autocomplete="off" placeholder="Nome" value="${esc(S.setup.addText)}"></div>
+    <button type="button" class="btn ghost" data-sdo="add">Aggiungi</button></div>
+    <span class="err" role="alert">${esc(S.setup.addErr)}</span>`;
+function vSetup() {
+  const st = S.setup, back = `<button type="button" class="btn ghost" data-setup="back">Indietro</button>`;
+  const head = (n, t) => `<div class="stack" style="gap:6px"><span class="eyebrow">Passo ${n} di 4</span><h1 class="h1">${t}</h1></div>`;
+  const err = `<span class="err" role="alert">${esc(st.err)}</span>`;
+  if (st.step === 5) {
+    if (S.creating) return `<div class="stack" style="gap:10px;padding-top:30vh;text-align:center"><span class="h1" style="font-size:22px" role="status">Sto preparando il tuo foglio…</span></div>`;
+    return `<div class="stack" style="gap:14px;padding-top:20vh"><span class="err" role="alert">Non sono riuscito a creare il foglio. Riprova.</span>
+      <button class="btn" data-setup="retry">Riprova</button>${back}</div>`;
+  }
+  if (st.step === 2) return `<form class="stack" style="gap:16px" data-setupform novalidate>${head(1, "Come ti chiami?")}
+    <div class="field"><label for="nomeIn">Il tuo nome</label>
+      <input class="inp" id="nomeIn" maxlength="30" autocomplete="given-name" value="${esc(st.nome)}"></div>${err}
+    <button class="btn" type="submit">Avanti</button>${back}</form>`;
+  if (st.step === 3) {
+    const on = st.conti.filter(c => c.on);
+    return `<form class="stack" style="gap:16px" data-setupform novalidate>${head(2, "I tuoi conti")}
+      <span class="sub">Tocca i conti che usi.</span>${setupChips("conti")}${setupAddRow("conti")}
+      ${on.map(c => `<div class="field"><label for="in-${st.conti.indexOf(c)}">${esc(c.nome)}: quanto c'è oggi?</label>
+        <input class="inp" id="in-${st.conti.indexOf(c)}" data-siniz="${st.conti.indexOf(c)}" autocomplete="off" autocapitalize="off" placeholder="0,00" value="${esc(c.iniz)}"></div>`).join("")}
+      ${on.length ? `<span class="sub">Lasciare vuoto vale 0. Se sei in rosso scrivi un numero negativo, per esempio -50.</span>` : ""}${err}
+      <button class="btn" type="submit">Avanti</button>${back}</form>`;
+  }
+  return `<form class="stack" style="gap:16px" data-setupform novalidate>${head(3, "Cosa vuoi registrare?")}
+    <div class="field"><span class="lab">Spese</span>${setupChips("spesa")}${setupAddRow("spesa")}</div>
+    <div class="field"><span class="lab">Entrate</span>${setupChips("entrata")}${setupAddRow("entrata")}</div>${err}
+    <button class="btn" type="submit">Crea il mio foglio</button>${back}</form>`;
 }
-async function submitFirstRun(ev) {
-  ev.preventDefault();
-  const n = $("#nomeIn").value.trim();
-  if (!n) { $("#firstErr").textContent = "Scrivi un nome."; return; }
-  store.set("ca-nome", n);
-  S.creating = true; S.error = null; render();
+function setupSubmit() {
+  const st = S.setup; st.err = "";
+  if (st.step === 2) {
+    const e = CORE.validateName(st.nome, []);
+    if (e) { st.err = e; return render(); }
+    st.nome = st.nome.trim(); store.set("ca-nome", st.nome); st.step = 3;
+  } else if (st.step === 3) {
+    const on = st.conti.filter(c => c.on);
+    if (!on.length) { st.err = "Scegli almeno un conto."; return render(); }
+    const bad = on.find(c => c.iniz.trim() && isNaN(CORE.parseSignedAmount(c.iniz)));
+    if (bad) { st.err = "Controlla la cifra di " + bad.nome + ": scrivi solo numeri."; return render(); }
+    st.step = 4;
+  } else if (st.step === 4) {
+    if (!st.spesa.some(c => c.on)) { st.err = "Scegli almeno una spesa."; return render(); }
+    if (!st.entrata.some(c => c.on)) { st.err = "Scegli almeno una entrata."; return render(); }
+    return setupCreate();
+  }
+  st.adding = null; st.addText = ""; st.addErr = "";
+  render(); window.scrollTo(0, 0);
+}
+async function setupCreate() {
+  const st = S.setup;
+  st.step = 5; st.failed = false; S.creating = true; S.error = null; render();
+  const input = {
+    nome: st.nome,
+    conti: st.conti.filter(c => c.on).map(c => ({ nome: c.nome, iniziale: c.iniz.trim() ? CORE.parseSignedAmount(c.iniz) : 0 })),
+    spesa: st.spesa.filter(c => c.on).map(c => c.nome),
+    entrata: st.entrata.filter(c => c.on).map(c => c.nome),
+    colore: "verde",
+  };
   try {
-    await createSheet({ nome: n, conti: [{ nome: "Contanti", iniziale: 0 }, { nome: "Banca", iniziale: 0 }], spesa: ["Spesa", "Pasti", "Svago"], entrata: ["Stipendio", "Altro"], colore: "verde" });
-    S.firstRun = false;
+    // Un ultimo controllo: se intanto un foglio c'è già (creato da un altro dispositivo) uso quello, senza farne un secondo.
+    const found = await findSheet();
+    if (found) { store.set("ca-sheet", found); store.set("ca-tagged", found); }
+    else await createSheet(input);
+    S.firstRun = false; S.creating = false; S.setup = newSetup();
   } catch (e) {
-    if (e instanceof AuthError) { S.creating = false; login(true); return; }
-    S.error = e;
-  } finally { S.creating = false; render(); }
+    S.creating = false;
+    if (e instanceof AuthError) { render(); login(true); return; }
+    st.failed = true;
+  }
+  render();
   if (sheetId()) loadAll();
+}
+function setupBind() {
+  const st = S.setup;
+  $$("[data-setup]").forEach(b => b.addEventListener("click", () => {
+    const a = b.dataset.setup;
+    if (a === "next") { st.step = Math.max(st.step, 2); render(); }
+    else if (a === "retry") setupCreate();
+    else if (a === "back") { st.err = ""; st.adding = null; st.step = st.step === 5 ? 4 : Math.max(1, st.step - 1); render(); window.scrollTo(0, 0); }
+  }));
+  const form = $("[data-setupform]"); if (form) form.addEventListener("submit", ev => { ev.preventDefault(); setupSubmit(); });
+  const nin = $("#nomeIn"); if (nin) nin.addEventListener("input", () => { st.nome = nin.value; });
+  $$("[data-siniz]").forEach(i => i.addEventListener("input", () => { st.conti[+i.dataset.siniz].iniz = i.value; }));
+  $$("[data-sk]").forEach(b => b.addEventListener("click", () => { const c = st[b.dataset.sk][+b.dataset.si]; c.on = !c.on; st.err = ""; render(); }));
+  $$("[data-sadd]").forEach(b => b.addEventListener("click", () => { st.adding = b.dataset.sadd; st.addText = ""; st.addErr = ""; render(); const i = $("#addIn"); if (i) i.focus(); }));
+  const ain = $("#addIn");
+  if (ain) {
+    ain.addEventListener("input", () => { st.addText = ain.value; });
+    // Invio aggiunge il nome, senza inviare il passo intero.
+    ain.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); ev.stopPropagation(); setupAdd(); } });
+  }
+  const add = $('[data-sdo="add"]'); if (add) add.addEventListener("click", setupAdd);
+}
+function setupAdd() {
+  const st = S.setup, key = st.adding; if (!key) return;
+  const e = CORE.validateName(st.addText, st[key].map(c => c.nome));
+  if (e) { st.addErr = e; render(); const i = $("#addIn"); if (i) { i.focus(); const l = i.value.length; try { i.setSelectionRange(l, l); } catch {} } return; }
+  st[key].push(key === "conti" ? { nome: st.addText.trim(), on: true, iniz: "" } : { nome: st.addText.trim(), on: true });
+  st.adding = null; st.addText = ""; st.addErr = ""; st.err = ""; render();
 }
 // Andamento del patrimonio: si parte dal saldo di oggi e si tolgono, giorno per giorno all'indietro, i movimenti dei conti liquidi.
 // I trasferimenti verso l'ETF abbassano la liquidità, come nel totale. Con le cifre nascoste resta solo la forma della linea.
@@ -775,7 +875,7 @@ function bind() {
       setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = old; b.classList.remove("armed"); } }, 4000);
     });
   });
-  on("#firstForm", "submit", submitFirstRun);
+  setupBind();
   on("#findBtn", "click", () => ensureSheet());
   on("#flushBtn", "click", () => { flush().then(() => loadAll()); });
   const dis = $("#discardBtn");
