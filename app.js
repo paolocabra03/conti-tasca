@@ -1028,21 +1028,23 @@ async function cfgSave() {
   if (nomeUtente.length > 30) { say("Il nome: al massimo 30 caratteri."); return; }
   const changes = [];
   for (const [key, , kind] of CFG_SEC) c[key].forEach(it => { const nuovo = it.nome.trim(); if (it.orig && it.orig !== nuovo) changes.push({ key, kind, old: it.orig, new: nuovo }); });
-  for (const ch of changes) {
-    // La sostituzione nel foglio non può filtrare per Tipo: se lo stesso nome sta in entrambe le liste, cambierebbe anche l'altra.
-    if (ch.kind !== "conto" && S.set[ch.kind === "spesa" ? "entrata" : "spesa"].some(x => x.nome === ch.old)) {
-      say("“" + ch.old + "” c'è sia tra le spese sia tra le entrate: da qui non si può rinominare."); return;
-    }
-  }
   if (changes.length && Q.all().length) { say("Ci sono movimenti in attesa di essere inviati: aspetta che partano e riprova."); return; }
+  // Le tipologie si cambiano riga per riga (lo stesso nome può stare tra spese ed entrate): si rilegge il foglio adesso.
+  let fresh = [];
+  if (changes.some(ch => ch.kind !== "conto")) {
+    try { fresh = (await api("/values/" + encodeURIComponent("Movimenti!A2:C") + "?valueRenderOption=UNFORMATTED_VALUE")).values || []; }
+    catch (e) { say(writeError(e) || "Non sono riuscito a leggere il foglio."); return; }
+  }
   for (const ch of changes) {
-    const n = CORE.usage(S.mov, ch.kind, ch.old);
+    const n = ch.kind === "conto" ? CORE.usage(S.mov, ch.kind, ch.old) : CORE.rowsToRename(fresh, ch.kind, ch.old).length;
     if (!confirm('Rinomino "' + ch.old + '" in "' + ch.new + '"? Cambiano anche ' + n + (n === 1 ? " movimento." : " movimenti."))) return;
   }
   const kv = { ...S.set.kv, nome: nomeUtente };
   for (const ch of changes) if (ch.kind === "conto") for (const f of ["conto_pac", "conto_inv"]) if (kv[f] === ch.old) kv[f] = ch.new;
   const requests = [];
-  CORE.renameSteps(changes).forEach(st => requests.push(...CORE.renameRequests(st.kind, st.old, st.new)));
+  CORE.renameSteps(changes.filter(ch => ch.kind === "conto")).forEach(st => requests.push(...CORE.renameRequests(st.kind, st.old, st.new)));
+  // Ogni riga ha un solo nome vecchio e le richieste partono tutte dalla stessa lettura: niente nomi provvisori.
+  changes.filter(ch => ch.kind !== "conto").forEach(ch => requests.push(...CORE.renameRowRequests(fresh, ch.kind, ch.old, ch.new)));
   requests.push(CORE.settingsUpdateRequest({ ...next, kv }));
   c.saving = true; render();
   try {

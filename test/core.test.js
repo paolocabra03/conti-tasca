@@ -165,14 +165,28 @@ test("renameRequests conto: Movimenti colonna F e Impostazioni colonna M", () =>
   }
 });
 
-test("renameRequests tipologia: solo Movimenti colonna C", () => {
-  for (const kind of ["spesa", "entrata"]) {
-    const r = C.renameRequests(kind, "Pasti", "Cibo");
-    assert.equal(r.length, 1);
-    assert.deepEqual(r[0].findReplace.range, { sheetId: 100, startRowIndex: 1, startColumnIndex: 2, endColumnIndex: 3 });
-    assert.equal(r[0].findReplace.find, "Pasti"); assert.equal(r[0].findReplace.replacement, "Cibo");
-    assert.equal(r[0].findReplace.matchEntireCell, true);
-  }
+test("renameRequests tipologia: nessuna findReplace (si usa renameRowRequests)", () => {
+  assert.deepEqual(C.renameRequests("spesa", "Pasti", "Cibo"), []);
+  assert.deepEqual(C.renameRequests("entrata", "Pasti", "Cibo"), []);
+});
+
+test("renameRowRequests: solo le righe col Tipo giusto, una richiesta per gruppo di righe vicine", () => {
+  const rows = [
+    [1, "Spesa", "Regali"], [2, "Spesa", "Regali"], [3, "Entrata", "Regali"], [4, "Spesa", "Pasti"],
+    [5, "Spesa", "Regali"], [6, "Spesa", "Regali"], [7, "Spesa", "Regali"], [8, "Spesa", "regali"],
+  ];
+  const r = C.renameRowRequests(rows, "spesa", "Regali", "Doni");
+  assert.equal(r.length, 2);
+  assert.deepEqual(r[0].updateCells.start, { sheetId: 100, rowIndex: 1, columnIndex: 2 });
+  assert.equal(r[0].updateCells.rows.length, 2);
+  assert.deepEqual(r[1].updateCells.start, { sheetId: 100, rowIndex: 5, columnIndex: 2 });
+  assert.equal(r[1].updateCells.rows.length, 3);
+  assert.deepEqual(r[1].updateCells.rows[2], { values: [{ userEnteredValue: { stringValue: "Doni" } }] });
+  assert.equal(r[1].updateCells.fields, "userEnteredValue");
+  const e = C.renameRowRequests(rows, "entrata", "Regali", "Doni");
+  assert.equal(e.length, 1);
+  assert.deepEqual(e[0].updateCells.start, { sheetId: 100, rowIndex: 3, columnIndex: 2 });
+  assert.equal(C.renameRowRequests(rows, "entrata", "Pasti", "X").length, 0);
 });
 
 test("settingsUpdateRequest: 59 righe su Impostazioni A2:M60, formula del prezzo come formulaValue", () => {
