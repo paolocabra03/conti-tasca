@@ -139,7 +139,7 @@ test("buildCreateBody: formule di Conti e Riepilogo in A1", () => {
     const f = b.sheets[i].data[0].rowData[0].values[0].userEnteredValue.formulaValue;
     assert.ok(typeof f === "string" && f.startsWith("="), b.sheets[i].properties.title);
   }
-  assert.ok(b.sheets[1].data[0].rowData[0].values[0].userEnteredValue.formulaValue.includes('SUM(FILTER(s;t="SI"))'));
+  assert.ok(b.sheets[1].data[0].rowData[0].values[0].userEnteredValue.formulaValue.includes('SUM(FILTER(s;t<>"NO"))'));
 });
 
 test("buildFormatRequests: date, euro e mesi sulle colonne giuste", () => {
@@ -161,7 +161,7 @@ test("renameRequests conto: Movimenti colonna F e Impostazioni colonna M", () =>
   assert.deepEqual(b.range, { sheetId: 500, startRowIndex: 1, startColumnIndex: 12, endColumnIndex: 13 });
   for (const f of [a, b]) {
     assert.equal(f.find, "Banca"); assert.equal(f.replacement, "Intesa");
-    assert.equal(f.matchCase, true); assert.equal(f.matchEntireCell, true);
+    assert.equal(f.matchCase, false); assert.equal(f.matchEntireCell, true);
   }
 });
 
@@ -255,4 +255,38 @@ test("settingsToRows: con un ETF della lista scrive la formula del prezzo (ha la
 test("kvRow: riga della chiave nelle Impostazioni (foglio, 1 = prima riga dati A2)", () => {
   assert.equal(C.kvRow("quote"), 9 + 1);
   assert.equal(C.kvRow("nome"), 2);
+});
+
+/* ---------- giro finale: valori scritti a mano e nomi ---------- */
+const setBase = () => C.parseSettings([HEADER, ["Banca", 100, "SI", "NO"], ["Vuoto", 5, "", "NO"]]);
+test("normalizeMov: tipo minuscolo, conto con spazio, tipo estraneo scartato, trasferimenti minuscolo", () => {
+  const s = setBase();
+  const out = C.normalizeMov([
+    { tipo: "entrata", tip: " Stipendio ", imp: 10, conto: "banca " },
+    { tipo: "Spesa", tip: "trasferimenti", imp: 4, conto: "BANCA" },
+    { tipo: "", tip: "x", imp: 99, conto: "Banca" },
+    { tipo: "Altro", tip: "x", imp: 99, conto: "Banca" },
+  ], s);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out.map(m => [m.tipo, m.tip, m.conto]), [["Entrata", "Stipendio", "Banca"], ["Spesa", "Trasferimenti", "Banca"]]);
+});
+test("saldi con valori scritti a mano: stessi risultati del foglio", () => {
+  const s = setBase();
+  const mov = C.normalizeMov([
+    { tipo: "entrata", tip: "A", imp: 10, conto: "banca " },
+    { tipo: "Spesa", tip: "A", imp: 3, conto: "Banca" },
+    { tipo: "Spesa", tip: "A", imp: 7, conto: "" },
+    { tipo: "", tip: "A", imp: 50, conto: "Banca" },
+  ], s);
+  const b = C.computeBalances(mov, s);
+  assert.deepEqual(b.conti.map(c => [c.nome, c.saldo]), [["Banca", 107], ["Vuoto", 5]]);
+  assert.equal(b.totale, 112); // "Nel totale" vuoto = nel totale
+});
+test("formula Conti: nel totale tutto tranne NO; renameRequests ignora le maiuscole", () => {
+  assert.ok(C.buildCreateBody("x") && JSON.stringify(C.buildCreateBody("x")).includes('t<>\\"NO\\"'));
+  assert.ok(C.renameRequests("conto", "a", "b").every(r => r.findReplace.matchCase === false));
+});
+test("validateName rifiuta simboli da formula", () => {
+  for (const n of ["=SOMMA", "<a", ">a", "a*b", "a?b", "a~b"]) assert.match(C.validateName(n, []), /simboli/);
+  assert.equal(C.validateName("Risparmi-2", []), null);
 });

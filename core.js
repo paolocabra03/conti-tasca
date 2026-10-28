@@ -54,10 +54,25 @@ function settingsToRows(s) {
   return rows;
 }
 
+// Rende i movimenti letti dal foglio coerenti con le formule: Tipo solo Spesa/Entrata (le altre righe si scartano),
+// spazi tolti, Conto riportato al nome di Impostazioni (maiuscole ignorate), "Trasferimenti" in qualunque maiuscola.
+function normalizeMov(mov, s) {
+  const names = new Map((s.conti || []).map(c => [c.nome.toLowerCase(), c.nome]));
+  const out = [];
+  for (const m of mov) {
+    const t = str(m.tipo).toLowerCase();
+    if (t !== "spesa" && t !== "entrata") continue;
+    const tip = str(m.tip), conto = str(m.conto);
+    out.push({ ...m, tipo: t === "spesa" ? "Spesa" : "Entrata", tip: tip.toLowerCase() === "trasferimenti" ? "Trasferimenti" : tip, conto: names.get(conto.toLowerCase()) || conto });
+  }
+  return out;
+}
+
 function computeBalances(mov, s) {
   const list = s.conti.map(c => ({ nome: c.nome, saldo: c.iniziale, totale: c.totale, nascosto: c.nascosto }));
   const by = new Map(list.map(c => [c.nome, c]));
   for (const m of mov) {
+    if (!m.conto) continue;
     let c = by.get(m.conto);
     if (!c) { c = { nome: m.conto, saldo: 0, totale: true, nascosto: false }; by.set(m.conto, c); list.push(c); }
     c.saldo += m.tipo === "Entrata" ? m.imp : -m.imp;
@@ -74,6 +89,7 @@ function validateName(name, existing) {
   if (n.length > 30) return "Al massimo 30 caratteri.";
   const l = n.toLowerCase();
   if (l === "trasferimenti") return "Questo nome è riservato.";
+  if (/^[=<>]/.test(n) || /[*?~]/.test(n)) return "Non usare i simboli = < > * ? ~.";
   if ((existing || []).some(e => String(e).trim().toLowerCase() === l)) return "Esiste già.";
   return null;
 }
@@ -102,7 +118,7 @@ const parseSignedAmount = s => {
 function renameRequests(kind, oldName, newName) {
   if (kind !== "conto") return [];
   const fr = (sheetId, col) => ({ findReplace: {
-    find: oldName, replacement: newName, matchCase: true, matchEntireCell: true,
+    find: oldName, replacement: newName, matchCase: false, matchEntireCell: true,
     range: { sheetId, startRowIndex: 1, startColumnIndex: col, endColumnIndex: col + 1 },
   } });
   return [fr(SHEET.mov, 5), fr(SHEET.imp, 12)];
@@ -152,7 +168,7 @@ function usage(mov, kind, name) {
 }
 
 /* ---------- creazione del foglio ---------- */
-const CONTI_F = '=LET(n;FILTER(Impostazioni!A2:A;Impostazioni!A2:A<>"");i;FILTER(Impostazioni!B2:B;Impostazioni!A2:A<>"");t;FILTER(Impostazioni!C2:C;Impostazioni!A2:A<>"");e;MAP(n;LAMBDA(c;SUMIFS(Movimenti!D:D;Movimenti!F:F;c;Movimenti!B:B;"Entrata")));u;MAP(n;LAMBDA(c;SUMIFS(Movimenti!D:D;Movimenti!F:F;c;Movimenti!B:B;"Spesa")));s;i+e-u;VSTACK(HSTACK("Conto";"Saldo iniziale";"Entrate";"Uscite";"Saldo");HSTACK(n;i;e;u;s);HSTACK("Totale";"";"";"";SUM(FILTER(s;t="SI")))))';
+const CONTI_F = '=LET(n;FILTER(Impostazioni!A2:A;Impostazioni!A2:A<>"");i;FILTER(Impostazioni!B2:B;Impostazioni!A2:A<>"");t;FILTER(Impostazioni!C2:C;Impostazioni!A2:A<>"");e;MAP(n;LAMBDA(c;SUMIFS(Movimenti!D:D;Movimenti!F:F;c;Movimenti!B:B;"Entrata")));u;MAP(n;LAMBDA(c;SUMIFS(Movimenti!D:D;Movimenti!F:F;c;Movimenti!B:B;"Spesa")));s;i+e-u;VSTACK(HSTACK("Conto";"Saldo iniziale";"Entrate";"Uscite";"Saldo");HSTACK(n;i;e;u;s);HSTACK("Totale";"";"";"";SUM(FILTER(s;t<>"NO")))))';
 const RIEP_F = '=IFERROR(LET(d;FILTER(Movimenti!A2:D;Movimenti!A2:A<>"";Movimenti!C2:C<>"Trasferimenti");k;EOMONTH(CHOOSECOLS(d;1);-1)+1;m;SORT(UNIQUE(k));e;MAP(m;LAMBDA(x;SUMPRODUCT((k=x)*(CHOOSECOLS(d;2)="Entrata")*CHOOSECOLS(d;4))));u;MAP(m;LAMBDA(x;SUMPRODUCT((k=x)*(CHOOSECOLS(d;2)="Spesa")*CHOOSECOLS(d;4))));VSTACK(HSTACK("Mese";"Entrate";"Uscite";"Netto");HSTACK(m;e;u;e-u)));HSTACK("Mese";"Entrate";"Uscite";"Netto"))';
 const IMP_HEAD = ["Conto", "Saldo iniziale", "Nel totale", "Nascosto", "", "Tipologia spesa", "Nascosta", "", "Tipologia entrata", "Nascosta", "", "Chiave", "Valore"];
 const cell = v => {
@@ -204,6 +220,6 @@ function buildFormatRequests() {
   ];
 }
 
-const C = { SHEET, ETF_LIST, priceFormula, kvRow, parseSettings, settingsToRows, renameRequests, renameRowRequests, rowsToRename, renameSteps, settingsUpdateRequest, usage, buildCreateBody, buildFormatRequests, computeBalances, validateName, parseInputAmount, parseSignedAmount };
+const C = { SHEET, ETF_LIST, priceFormula, kvRow, parseSettings, settingsToRows, renameRequests, renameRowRequests, rowsToRename, renameSteps, settingsUpdateRequest, usage, buildCreateBody, buildFormatRequests, computeBalances, normalizeMov, validateName, parseInputAmount, parseSignedAmount };
 if (typeof module === "object" && module.exports) module.exports = C; else root.CA_CORE = C;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -118,6 +118,7 @@ function logout() {
   store.del("ca-token"); store.del("ca-cache"); store.del("ca-known");
   S.firstRun = false; S.finding = false; S.creating = false; S.error = null; S.setup = newSetup();
   if (t) fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(t.value), { method: "POST" }).catch(() => {});
+  store.del("ca-colore"); setAccent("verde"); S.set = CORE.parseSettings([]); S.cfg = null; S.tab = "home";
   S.mov = []; S.conti = []; S.totale = 0; S.pac = []; S.loadedAt = null;
   render();
 }
@@ -221,9 +222,10 @@ async function loadAll() {
   }
 }
 function apply({ mov, imp, pac }) {
-  S.mov = mov.map((r, i) => ({ row: i + 2, d: toDate(r[0]), tipo: r[1] || "", tip: r[2] || "", imp: num(r[3]), cat: r[4] || "", conto: r[5] || "", desc: r[6] || "" }))
-    .filter(m => m.d && m.imp);
-  S.set = CORE.parseSettings(imp);
+  const imp0 = CORE.parseSettings(imp);
+  S.mov = CORE.normalizeMov(mov.map((r, i) => ({ row: i + 2, d: toDate(r[0]), tipo: r[1] || "", tip: r[2] || "", imp: num(r[3]), cat: r[4] || "", conto: r[5] || "", desc: r[6] || "" }))
+    .filter(m => m.d && m.imp), imp0);
+  S.set = imp0;
   const col = coloreOk(S.set.kv.colore);
   setAccent(col); if (store.get("ca-colore") !== col) store.set("ca-colore", col);
   const b = CORE.computeBalances(S.mov, S.set);
@@ -812,15 +814,6 @@ function vPac() {
         <span class="sub" style="font-size:12px">Solo la somma dei versamenti, senza rendimento.</span>
       </div>
     </details>
-  </section>
-  <section class="card">
-    <details class="more"><summary>Account<span>esci</span></summary>
-      <div class="stack" style="gap:10px">
-        <button class="btn ghost" data-goto="settings">Impostazioni</button>
-        <button class="btn danger" id="logoutAsk" data-ask="Tocca ancora per uscire">Esci dall'account Google</button>
-        <span class="sub" id="ver"></span>
-      </div>
-    </details>
   </section>`;
 }
 /* ---------- render ---------- */
@@ -946,7 +939,12 @@ function vSettings() {
   <section class="card"><span class="eyebrow">Colore</span>
     <div class="swatches" role="group" aria-label="Colore principale">${COLORI.map(([id, nm, hex]) => `<button type="button" class="swatch" data-colore="${id}" style="--sw:${hex}" aria-label="${nm}" aria-pressed="${coloreOk(S.set.kv.colore) === id}"><i></i></button>`).join("")}</div></section>
   <div class="stack" style="gap:10px;padding-bottom:16px"><span class="err" id="cfgErr" role="alert">${esc(c.err)}</span>
-    <button class="btn" type="button" id="cfgSave" ${c.saving ? "disabled" : ""}>${c.saving ? "Salvo…" : "Salva"}</button></div>`;
+    <button class="btn" type="button" id="cfgSave" ${c.saving ? "disabled" : ""}>${c.saving ? "Salvo…" : "Salva"}</button></div>
+  <section class="card"><span class="eyebrow">Account</span>
+    <div class="stack" style="gap:10px">
+      <button class="btn danger" id="logoutAsk" data-ask="Tocca ancora per uscire">Esci dall'account Google</button>
+      <span class="sub" id="ver"></span>
+    </div></section>`;
 }
 // Piano di accumulo (PAC): facoltativo, spento finché non lo accendi qui.
 function pacSection(c) {
@@ -1099,6 +1097,7 @@ async function cfgSave() {
   const kv = { ...S.set.kv, nome: nomeUtente };
   for (const ch of changes) if (ch.kind === "conto") for (const f of ["conto_pac", "conto_inv"]) if (kv[f] === ch.old) kv[f] = ch.new;
   Object.assign(kv, pacKv);
+  if (kv.etf !== S.set.kv.etf) kv.quote = null; // le quote erano di un altro ETF
   const requests = [];
   CORE.renameSteps(changes.filter(ch => ch.kind === "conto")).forEach(st => requests.push(...CORE.renameRequests(st.kind, st.old, st.new)));
   // Ogni riga ha un solo nome vecchio e le richieste partono tutte dalla stessa lettura: niente nomi provvisori.
