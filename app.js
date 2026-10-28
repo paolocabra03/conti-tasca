@@ -669,7 +669,8 @@ function vHome() {
   <section class="card" style="padding-bottom:8px;gap:4px">
     <div class="row"><span class="eyebrow">Ultimi movimenti</span><button class="link" data-goto="mov">Vedi tutti</button></div>
     ${recent.length ? `<div class="list">${recent.map(m => rowHtml(m, true)).join("")}</div>` : `<span class="empty">Ancora nessun movimento.</span>`}
-  </section>`;
+  </section>
+  <section class="card"><button class="btn ghost" data-goto="settings">Impostazioni</button></section>`;
 }
 function vMov() {
   const q = S.movQuery.trim().toLowerCase();
@@ -819,6 +820,7 @@ function vPac() {
   <section class="card">
     <details class="more"><summary>Account<span>esci</span></summary>
       <div class="stack" style="gap:10px">
+        <button class="btn ghost" data-goto="settings">Impostazioni</button>
         <button class="btn danger" id="logoutAsk" data-ask="Tocca ancora per uscire">Esci dall'account Google</button>
         <span class="sub" id="ver"></span>
       </div>
@@ -837,8 +839,9 @@ function render() {
   const typed = {};
   $$("#pacForm input, #valForm input").forEach(i => { if (i.id) typed[i.id] = i.type === "checkbox" ? i.checked : i.value; });
   $$(".tab").forEach(t => t.setAttribute("aria-current", t.dataset.tab === S.tab ? "page" : "false"));
-  app.innerHTML = S.tab === "home" ? vHome() : S.tab === "mov" ? vMov() : S.tab === "charts" ? vCharts() : vPac();
+  app.innerHTML = S.tab === "home" ? vHome() : S.tab === "mov" ? vMov() : S.tab === "charts" ? vCharts() : S.tab === "settings" ? vSettings() : vPac();
   bind();
+  if (S.tab === "settings") bindSettings();
   document.body.classList.toggle("has-dock", S.tab === "mov");
   Object.entries(typed).forEach(([id, v]) => { const el = document.getElementById(id); if (!el) return; if (el.type === "checkbox") el.checked = v; else el.value = v; });
 }
@@ -895,7 +898,162 @@ function bind() {
     });
   }
 }
-function go(tab) { S.tab = tab; render(); window.scrollTo(0, 0); }
+function go(tab) { if (tab === "settings" && S.tab !== "settings") S.cfg = newCfg(); if (tab !== "settings") S.cfg = null; S.tab = tab; render(); window.scrollTo(0, 0); }
+
+/* ---------- impostazioni: conti e tipologie ---------- */
+// Si lavora su una copia (S.cfg) e si scrive tutto insieme con "Salva": prima le rinomine nei movimenti, poi le Impostazioni.
+const CFG_SEC = [["conti", "Conti", "conto"], ["spesa", "Tipologie di spesa", "spesa"], ["entrata", "Tipologie di entrata", "entrata"]];
+const newCfg = () => ({
+  conti: S.set.conti.map(c => ({ nome: c.nome, orig: c.nome, inizText: String(c.iniziale).replace(".", ","), totale: c.totale, nascosto: c.nascosto })),
+  spesa: S.set.spesa.map(c => ({ nome: c.nome, orig: c.nome, nascosta: c.nascosta })),
+  entrata: S.set.entrata.map(c => ({ nome: c.nome, orig: c.nome, nascosta: c.nascosta })),
+  nome: S.set.kv.nome || nome(), adding: null, addText: "", addErr: "", err: "", saving: false,
+});
+const isOff = it => !!(it.nascosto || it.nascosta);
+const kindOf = key => CFG_SEC.find(x => x[0] === key)[2];
+function cfgRow(key, it, i, list) {
+  const off = isOff(it);
+  const n = list.length;
+  const ctl = off
+    ? `<button type="button" class="btn ghost small" data-sact="show" data-k="${key}" data-i="${i}">Mostra di nuovo</button>`
+    : `<button type="button" class="round-btn small" data-sact="up" data-k="${key}" data-i="${i}" aria-label="Sposta su" ${i === 0 || isOff(list[i - 1]) ? "disabled" : ""}>↑</button>
+       <button type="button" class="round-btn small" data-sact="down" data-k="${key}" data-i="${i}" aria-label="Sposta giù" ${i === n - 1 || isOff(list[i + 1]) ? "disabled" : ""}>↓</button>
+       <button type="button" class="btn danger small" data-sact="rm" data-k="${key}" data-i="${i}">Togli</button>`;
+  const extra = key !== "conti" || off ? "" : `<div class="srow2"><label class="sr" for="in-${i}">Saldo iniziale</label>
+      <input class="inp" id="in-${i}" data-f="inizText" data-k="${key}" data-i="${i}" inputmode="decimal" autocomplete="off" placeholder="Saldo iniziale" value="${esc(it.inizText)}">
+      <label class="check"><input type="checkbox" data-f="totale" data-k="${key}" data-i="${i}" ${it.totale ? "checked" : ""}><span>Conta nel patrimonio</span></label></div>`;
+  return `<div class="srow ${off ? "off" : ""}"><div class="srow1">
+      <label class="sr" for="nm-${key}-${i}">Nome</label>
+      <input class="inp" id="nm-${key}-${i}" data-f="nome" data-k="${key}" data-i="${i}" maxlength="30" autocomplete="off" value="${esc(it.nome)}" ${off ? "readonly" : ""}>
+      <div class="sctl">${ctl}</div></div>${extra}</div>`;
+}
+function vSettings() {
+  const c = S.cfg || (S.cfg = newCfg());
+  const sec = CFG_SEC.map(([key, title]) => `<section class="card"><span class="eyebrow">${title}</span>
+    <div class="slist">${c[key].map((it, i) => cfgRow(key, it, i, c[key])).join("") || `<span class="empty">Nessuna voce.</span>`}</div>
+    ${c.adding === key
+      ? `<div class="addrow"><div class="field"><label for="cfgAdd" class="sr">Nome</label><input class="inp" id="cfgAdd" maxlength="30" autocomplete="off" placeholder="Nome" value="${esc(c.addText)}"></div>
+         <button type="button" class="btn ghost" data-sact="addok">Aggiungi</button></div><span class="err" role="alert">${esc(c.addErr)}</span>`
+      : `<button type="button" class="chip more" data-sact="add" data-k="${key}">+ Aggiungi</button>`}
+  </section>`).join("");
+  return `<div class="top"><div class="stack"><span class="eyebrow">Impostazioni</span><h1 class="h1">Conti e tipologie</h1></div>
+    <button class="round-btn" data-goto="home" aria-label="Chiudi senza salvare">${ICON.prev}</button></div>
+  ${sec}
+  <section class="card"><span class="eyebrow">Nome</span>
+    <div class="field"><label class="sr" for="cfgNome">Il tuo nome</label><input class="inp" id="cfgNome" maxlength="30" autocomplete="off" value="${esc(c.nome)}"></div></section>
+  <!-- Task 8: sezione Colore. Task 7: sezione PAC. -->
+  <div class="stack" style="gap:10px;padding-bottom:16px"><span class="err" id="cfgErr" role="alert">${esc(c.err)}</span>
+    <button class="btn" type="button" id="cfgSave" ${c.saving ? "disabled" : ""}>${c.saving ? "Salvo…" : "Salva"}</button></div>`;
+}
+function bindSettings() {
+  const c = S.cfg; if (!c) return;
+  const focusEl = sel => { const el = $(sel); if (el) el.focus(); return !!el; };
+  $$("[data-f]").forEach(el => el.addEventListener("input", () => {
+    const it = c[el.dataset.k][+el.dataset.i], f = el.dataset.f;
+    it[f] = el.type === "checkbox" ? el.checked : el.value;
+  }));
+  const nm = $("#cfgNome"); if (nm) nm.addEventListener("input", () => { c.nome = nm.value; });
+  const add = $("#cfgAdd");
+  if (add) {
+    add.addEventListener("input", () => { c.addText = add.value; });
+    add.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); cfgAddOk(); } });
+  }
+  $$("[data-sact]").forEach(b => b.addEventListener("click", () => {
+    const act = b.dataset.sact, key = b.dataset.k, i = +b.dataset.i;
+    if (act === "add") { c.adding = key; c.addText = ""; c.addErr = ""; render(); focusEl("#cfgAdd"); return; }
+    if (act === "addok") { cfgAddOk(); return; }
+    const list = c[key], it = list[i];
+    if (act === "up" || act === "down") {
+      const j = act === "up" ? i - 1 : i + 1;
+      if (!list[j] || isOff(list[j])) return;
+      [list[i], list[j]] = [list[j], list[i]];
+      render();
+      if (!focusEl(`[data-sact="${act}"][data-k="${key}"][data-i="${j}"]:not([disabled])`)) focusEl(`[data-sact="${act === "up" ? "down" : "up"}"][data-k="${key}"][data-i="${j}"]`);
+      return;
+    }
+    if (act === "show") {
+      list.splice(i, 1); if (key === "conti") it.nascosto = false; else it.nascosta = false;
+      const at = list.findIndex(isOff);
+      list.splice(at < 0 ? list.length : at, 0, it);
+      render(); return;
+    }
+    if (act === "rm") cfgRemove(key, i);
+  }));
+  const save = $("#cfgSave"); if (save) save.addEventListener("click", cfgSave);
+}
+function cfgAddOk() {
+  const c = S.cfg, key = c.adding; if (!key) return;
+  const e = CORE.validateName(c.addText, c[key].map(x => x.nome));
+  if (e) { c.addErr = e; render(); const i = $("#cfgAdd"); if (i) { i.focus(); const l = i.value.length; try { i.setSelectionRange(l, l); } catch {} } return; }
+  const it = key === "conti" ? { nome: c.addText.trim(), orig: null, inizText: "0", totale: true, nascosto: false } : { nome: c.addText.trim(), orig: null, nascosta: false };
+  const at = c[key].findIndex(isOff);
+  c[key].splice(at < 0 ? c[key].length : at, 0, it);
+  c.adding = null; c.addText = ""; c.addErr = ""; render();
+}
+// "Togli": senza movimenti la voce sparisce; con movimenti viene solo nascosta dalle scelte.
+function cfgRemove(key, i) {
+  const c = S.cfg, list = c[key], it = list[i], kind = kindOf(key);
+  const k = S.set.kv;
+  if (key === "conti" && it.orig && (it.orig === k.conto_pac || it.orig === k.conto_inv)) { toast("Questo conto serve al piano di accumulo: non si può togliere."); return; }
+  const n = it.orig ? CORE.usage(S.mov, kind, it.orig) : 0;
+  list.splice(i, 1);
+  if (n > 0) {
+    if (key === "conti") it.nascosto = true; else it.nascosta = true;
+    list.push(it);
+    toast("È usata in " + n + (n === 1 ? " movimento" : " movimenti") + ": la nascondo dalle scelte, i movimenti restano.");
+  }
+  render();
+}
+async function cfgSave() {
+  const c = S.cfg, err = $("#cfgErr"), say = m => { c.err = m; if (err) err.textContent = m; };
+  say("");
+  if (!navigator.onLine) { say("Per cambiare le impostazioni serve la connessione."); return; }
+  // Controlli sui nomi: ognuno contro gli altri della stessa lista (se stesso escluso, così "banca" → "Banca" passa).
+  const next = { conti: [], spesa: [], entrata: [] };
+  for (const [key] of CFG_SEC) {
+    const list = c[key];
+    for (let i = 0; i < list.length; i++) {
+      const it = list[i], nm = it.nome.trim();
+      const e = CORE.validateName(nm, list.filter((_, j) => j !== i).map(x => x.nome));
+      if (e) { say((nm ? "“" + nm + "”: " : "") + e); return; }
+      if (key === "conti") {
+        const t = it.inizText.trim(), ini = t === "" ? 0 : CORE.parseSignedAmount(t);
+        if (isNaN(ini)) { say("Saldo iniziale di “" + nm + "”: scrivi un numero."); return; }
+        next.conti.push({ nome: nm, iniziale: ini, totale: !!it.totale, nascosto: !!it.nascosto });
+      } else next[key].push({ nome: nm, nascosta: !!it.nascosta });
+    }
+  }
+  const nomeUtente = c.nome.trim();
+  if (!nomeUtente) { say("Scrivi il tuo nome."); return; }
+  if (nomeUtente.length > 30) { say("Il nome: al massimo 30 caratteri."); return; }
+  const changes = [];
+  for (const [key, , kind] of CFG_SEC) c[key].forEach(it => { const nuovo = it.nome.trim(); if (it.orig && it.orig !== nuovo) changes.push({ key, kind, old: it.orig, new: nuovo }); });
+  for (const ch of changes) {
+    // La sostituzione nel foglio non può filtrare per Tipo: se lo stesso nome sta in entrambe le liste, cambierebbe anche l'altra.
+    if (ch.kind !== "conto" && S.set[ch.kind === "spesa" ? "entrata" : "spesa"].some(x => x.nome === ch.old)) {
+      say("“" + ch.old + "” c'è sia tra le spese sia tra le entrate: da qui non si può rinominare."); return;
+    }
+  }
+  if (changes.length && Q.all().length) { say("Ci sono movimenti in attesa di essere inviati: aspetta che partano e riprova."); return; }
+  for (const ch of changes) {
+    const n = CORE.usage(S.mov, ch.kind, ch.old);
+    if (!confirm('Rinomino "' + ch.old + '" in "' + ch.new + '"? Cambiano anche ' + n + (n === 1 ? " movimento." : " movimenti."))) return;
+  }
+  const kv = { ...S.set.kv, nome: nomeUtente };
+  for (const ch of changes) if (ch.kind === "conto") for (const f of ["conto_pac", "conto_inv"]) if (kv[f] === ch.old) kv[f] = ch.new;
+  const requests = [];
+  CORE.renameSteps(changes).forEach(st => requests.push(...CORE.renameRequests(st.kind, st.old, st.new)));
+  requests.push(CORE.settingsUpdateRequest({ ...next, kv }));
+  c.saving = true; render();
+  try {
+    await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
+  } catch (e) {
+    c.saving = false; c.err = writeError(e) || "Non sono riuscito a salvare."; render(); return;
+  }
+  store.set("ca-nome", nomeUtente);
+  S.cfg = null; S.tab = "home"; render(); window.scrollTo(0, 0);
+  toast("Impostazioni salvate"); loadAll();
+}
 
 /* ---------- avvisi ---------- */
 let toastT;

@@ -151,3 +151,63 @@ test("buildFormatRequests: date, euro e mesi sulle colonne giuste", () => {
   assert.equal(f(400, 2).repeatCell.cell.userEnteredFormat.numberFormat.pattern, "#,##0.00 €");
   assert.equal(f(300, 0).repeatCell.cell.userEnteredFormat.numberFormat.pattern, "mmmm yyyy");
 });
+
+/* ---------- Impostazioni: rinomina, salvataggio, utilizzo ---------- */
+test("renameRequests conto: Movimenti colonna F e Impostazioni colonna M", () => {
+  const r = C.renameRequests("conto", "Banca", "Intesa");
+  assert.equal(r.length, 2);
+  const [a, b] = r.map(x => x.findReplace);
+  assert.deepEqual(a.range, { sheetId: 100, startRowIndex: 1, startColumnIndex: 5, endColumnIndex: 6 });
+  assert.deepEqual(b.range, { sheetId: 500, startRowIndex: 1, startColumnIndex: 12, endColumnIndex: 13 });
+  for (const f of [a, b]) {
+    assert.equal(f.find, "Banca"); assert.equal(f.replacement, "Intesa");
+    assert.equal(f.matchCase, true); assert.equal(f.matchEntireCell, true);
+  }
+});
+
+test("renameRequests tipologia: solo Movimenti colonna C", () => {
+  for (const kind of ["spesa", "entrata"]) {
+    const r = C.renameRequests(kind, "Pasti", "Cibo");
+    assert.equal(r.length, 1);
+    assert.deepEqual(r[0].findReplace.range, { sheetId: 100, startRowIndex: 1, startColumnIndex: 2, endColumnIndex: 3 });
+    assert.equal(r[0].findReplace.find, "Pasti"); assert.equal(r[0].findReplace.replacement, "Cibo");
+    assert.equal(r[0].findReplace.matchEntireCell, true);
+  }
+});
+
+test("settingsUpdateRequest: 59 righe su Impostazioni A2:M60, formula del prezzo come formulaValue", () => {
+  const s = sample(); s.kv.prezzoFormula = "=GOOGLEFINANCE(\"X\")";
+  const u = C.settingsUpdateRequest(s).updateCells;
+  assert.deepEqual(u.start, { sheetId: 500, rowIndex: 1, columnIndex: 0 });
+  assert.equal(u.fields, "userEnteredValue");
+  assert.equal(u.rows.length, 59);
+  assert.ok(u.rows.every(r => r.values.length === 13));
+  assert.deepEqual(u.rows[0].values[0], { userEnteredValue: { stringValue: "Contanti" } });
+  assert.deepEqual(u.rows[0].values[1], { userEnteredValue: { numberValue: 100 } });
+  const prezzo = u.rows[9].values[12];
+  assert.deepEqual(prezzo, { userEnteredValue: { formulaValue: "=GOOGLEFINANCE(\"X\")" } });
+  assert.deepEqual(u.rows[40].values[0], {});
+});
+
+test("usage: conta i movimenti del conto o della tipologia (solo il Tipo giusto)", () => {
+  const mov = [
+    { tipo: "Spesa", tip: "Regali", conto: "Banca" },
+    { tipo: "Entrata", tip: "Regali", conto: "Banca" },
+    { tipo: "Spesa", tip: "Spesa", conto: "Contanti" },
+  ];
+  assert.equal(C.usage(mov, "conto", "Banca"), 2);
+  assert.equal(C.usage(mov, "spesa", "Regali"), 1);
+  assert.equal(C.usage(mov, "entrata", "Regali"), 1);
+  assert.equal(C.usage(mov, "spesa", "Nessuna"), 0);
+});
+
+test("renameSteps: rinomine incrociate passano da nomi provvisori", () => {
+  const simple = C.renameSteps([{ kind: "conto", old: "A", new: "B" }]);
+  assert.deepEqual(simple, [{ kind: "conto", old: "A", new: "B" }]);
+  const steps = C.renameSteps([{ kind: "spesa", old: "A", new: "B" }, { kind: "spesa", old: "B", new: "X" }]);
+  assert.equal(steps.length, 4);
+  // simulazione: tre celle A, B, C
+  let cells = ["A", "B", "C"];
+  for (const st of steps) cells = cells.map(c => c === st.old ? st.new : c);
+  assert.deepEqual(cells, ["B", "X", "C"]);
+});
