@@ -440,14 +440,14 @@ function vWelcome() {
   if (inSetup && st.step >= 2) return `<section class="wizard">${vSetup()}</section>`;
   let body;
   if (!logged) body = `<button class="gbtn" id="loginBtn">${ICON.google}Entra con Google</button>
-    <span class="sub">Google ti avviserà che l'app non è verificata: tocca "Avanzate" e poi "Vai a Contabile".</span>
+    <span class="sub">Google ti avviserà che l'app non è verificata: tocca "Avanzate" e poi "Vai a Conti in tasca".</span>
     <span class="sub">L'app vede solo il foglio che crea lei nel tuo Google Drive. I dati restano nel tuo account.</span>`;
   else if (S.finding) body = `<span class="sub" role="status">Cerco il tuo foglio…</span>`;
   else if (inSetup) body = `<button class="btn" data-setup="next">Continua</button>`;
   else body = S.error ? "" : `<button class="btn" id="findBtn">Cerca il mio foglio</button>`;
   return `<section class="welcome">
     <img class="logo" src="icons/icon-192.png" alt="">
-    <div class="stack" style="gap:8px"><h1 class="h1" style="font-size:32px">Contabile</h1>
+    <div class="stack" style="gap:8px"><h1 class="h1" style="font-size:32px">Conti in tasca</h1>
       <span class="sub" style="font-size:15px">Spese, entrate e conti, salvati in un foglio Google tutto tuo.</span></div>
     ${S.error && S.error.code !== "reauth" ? banner() : ""}
     ${body}

@@ -103,7 +103,7 @@ const createInput = () => ({ nome: "Marco", conti: [{ nome: "Contanti", iniziale
 
 test("buildCreateBody: titolo, locale e fogli con gli sheetId giusti", () => {
   const b = C.buildCreateBody(createInput());
-  assert.equal(b.properties.title, "Contabile – Marco");
+  assert.equal(b.properties.title, "Conti in tasca – Marco");
   assert.equal(b.properties.locale, "it_IT");
   assert.equal(b.properties.timeZone, "Europe/Rome");
   assert.deepEqual(b.sheets.map(s => [s.properties.sheetId, s.properties.title]),

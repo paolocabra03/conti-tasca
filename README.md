@@ -1,4 +1,4 @@
-# Contabile
+# Conti in tasca
 
 App web per tenere le proprie finanze personali: spese, entrate, trasferimenti tra conti, grafici e (a scelta) un piano di accumulo. Si installa sul telefono dal browser, come una normale app.
 

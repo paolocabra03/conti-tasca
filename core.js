@@ -192,7 +192,7 @@ function buildCreateBody({ nome, conti, spesa, entrata, colore }) {
     kv: { nome: str(nome), colore: str(colore) || "verde", pac: false, etf: "", importo_pac: 0, giorno_pac: 16, conto_pac: "", conto_inv: "", quote: null, prezzo: null },
   };
   return {
-    properties: { title: "Contabile – " + str(nome), locale: "it_IT", timeZone: "Europe/Rome" },
+    properties: { title: "Conti in tasca – " + str(nome), locale: "it_IT", timeZone: "Europe/Rome" },
     sheets: [
       sheet(SHEET.mov, "Movimenti", [["Data", "Tipo", "Tipologia", "Importo", "Categoria", "Conto", "Descrizione"]]),
       sheet(SHEET.conti, "Conti", [[CONTI_F]]),
