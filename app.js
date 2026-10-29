@@ -678,8 +678,7 @@ function vHome() {
   <section class="card" style="padding-bottom:8px;gap:4px">
     <div class="row"><span class="eyebrow">Ultimi movimenti</span><button class="link" data-goto="mov">Vedi tutti</button></div>
     ${recent.length ? `<div class="list">${recent.map(m => rowHtml(m, true)).join("")}</div>` : `<span class="empty">Ancora nessun movimento.</span>`}
-  </section>
-  <section class="card"><button class="btn ghost" data-goto="settings">Impostazioni</button></section>`;
+  </section>`;
 }
 function vMov() {
   const q = S.movQuery.trim().toLowerCase();
@@ -759,6 +758,7 @@ function nextPac() {
   if (d < t) d = new Date(t.getFullYear(), t.getMonth() + 1, S.set.kv.giorno_pac);
   return { d, days: Math.round((d - t) / 864e5) };
 }
+// Parte PAC della scheda Profilo: compare solo con il piano acceso.
 function vPac() {
   const e = pacEtf(), k = S.set.kv, plan = e.mensile;
   const totV = S.pac.reduce((a, p) => a + p.imp, 0);
@@ -767,11 +767,9 @@ function vPac() {
   const hist = byDateDesc(S.pac.map((p, i) => ({ ...p, row: i }))).slice(0, 12);
   const qFmt = (q, d) => q.toLocaleString("it-IT", { maximumFractionDigits: d });
   return `
-  <div class="top"><div class="stack"><span class="eyebrow">Piano di accumulo · ${esc(k.conto_pac)}</span><h1 class="h1">PAC</h1></div></div>
-  ${banner()}
   ${pacWarn()}
   <section class="hero" aria-label="Prossimo versamento">
-    <div class="stack"><span class="eyebrow">Prossimo versamento</span>
+    <div class="stack"><span class="eyebrow">PAC · prossimo versamento</span>
       <span class="big" style="font-size:34px;line-height:1.1">${np.d.getDate()} ${MESI[np.d.getMonth()]}</span>
       <span class="sub">${np.days === 0 ? "oggi" : np.days === 1 ? "domani" : "tra " + np.days + " giorni"} · ${M(plan)} da ${esc(k.conto_pac)}</span></div>
     <div class="tiles two">
@@ -817,22 +815,39 @@ function vPac() {
     </details>
   </section>`;
 }
+// Profilo: il PAC (se acceso), il foglio, le impostazioni e l'accesso. Così la barra ha sempre 5 voci e il "+" sta al centro.
+function vProfile() {
+  const agg = S.loadedAt ? new Date(S.loadedAt).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+  return `
+  <div class="top"><div class="stack"><span class="eyebrow">${pacOn() ? "PAC e account" : "Account"}</span><h1 class="h1">Profilo</h1></div></div>
+  ${banner()}
+  ${pacOn() ? vPac() : ""}
+  <section class="det" aria-label="Il tuo foglio">
+    <div><span>Nome</span><b>${esc(nome()) || "—"}</b></div>
+    <div><span>Ultimo aggiornamento</span><b>${agg}</b></div>
+  </section>
+  <a class="btn ghost" href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId() || "")}/edit" target="_blank" rel="noopener">Apri il foglio Google</a>
+  <button class="btn ghost" data-goto="settings">Impostazioni</button>
+  <div class="stack" style="gap:10px;padding-bottom:16px">
+    <button class="btn danger" id="logoutAsk" data-ask="Tocca ancora per uscire">Esci dall'account Google</button>
+    <span class="sub">I dati restano nel tuo foglio Google: uscendo si cancella solo la copia su questo telefono.</span>
+    <span class="sub" id="ver"></span>
+  </div>`;
+}
 /* ---------- render ---------- */
 function render() {
   const authed = !!sheetId() && (!!token() || S.mov.length > 0);
   const app = $("#app");
   if (!authed) { $("#nav").hidden = true; app.innerHTML = vWelcome(); bind(); return; }
   $("#nav").hidden = false;
-  // La scheda PAC c'è solo se il piano è acceso nelle impostazioni.
-  if (S.tab === "pac" && !pacOn()) S.tab = "home";
-  $('.tab[data-tab="pac"]').hidden = !pacOn();
-  $(".nav-in").classList.toggle("no-pac", !pacOn());
   VIEW.clear();
   // Quello che hai scritto nei moduli PAC non si perde se la schermata si ridisegna (aggiornamento in background).
   const typed = {};
   $$("#pacForm input, #valForm input").forEach(i => { if (i.id) typed[i.id] = i.type === "checkbox" ? i.checked : i.value; });
-  $$(".tab").forEach(t => t.setAttribute("aria-current", t.dataset.tab === S.tab ? "page" : "false"));
-  app.innerHTML = S.tab === "home" ? vHome() : S.tab === "mov" ? vMov() : S.tab === "charts" ? vCharts() : S.tab === "settings" ? vSettings() : vPac();
+  // Le Impostazioni si aprono dal Profilo: resta acceso quello.
+  const cur = S.tab === "settings" ? "prof" : S.tab;
+  $$(".tab").forEach(t => t.setAttribute("aria-current", t.dataset.tab === cur ? "page" : "false"));
+  app.innerHTML = S.tab === "home" ? vHome() : S.tab === "mov" ? vMov() : S.tab === "charts" ? vCharts() : S.tab === "settings" ? vSettings() : vProfile();
   bind();
   if (S.tab === "settings") bindSettings();
   document.body.classList.toggle("has-dock", S.tab === "mov");
@@ -932,7 +947,7 @@ function vSettings() {
       : `<button type="button" class="chip more" data-sact="add" data-k="${key}">+ Aggiungi</button>`}
   </section>`).join("");
   return `<div class="top"><div class="stack"><span class="eyebrow">Impostazioni</span><h1 class="h1">Conti e tipologie</h1></div>
-    <button class="round-btn" data-goto="home" aria-label="Chiudi senza salvare">${ICON.prev}</button></div>
+    <button class="round-btn" data-goto="prof" aria-label="Chiudi senza salvare">${ICON.prev}</button></div>
   ${sec}
   <section class="card"><span class="eyebrow">Nome</span>
     <div class="field"><label class="sr" for="cfgNome">Il tuo nome</label><input class="inp" id="cfgNome" maxlength="30" autocomplete="off" value="${esc(c.nome)}"></div></section>
@@ -940,12 +955,7 @@ function vSettings() {
   <section class="card"><span class="eyebrow">Colore</span>
     <div class="swatches" role="group" aria-label="Colore principale">${COLORI.map(([id, nm, hex]) => `<button type="button" class="swatch" data-colore="${id}" style="--sw:${hex}" aria-label="${nm}" aria-pressed="${coloreOk(S.set.kv.colore) === id}"><i></i></button>`).join("")}</div></section>
   <div class="stack" style="gap:10px;padding-bottom:16px"><span class="err" id="cfgErr" role="alert">${esc(c.err)}</span>
-    <button class="btn" type="button" id="cfgSave" ${c.saving ? "disabled" : ""}>${c.saving ? "Salvo…" : "Salva"}</button></div>
-  <section class="card"><span class="eyebrow">Account</span>
-    <div class="stack" style="gap:10px">
-      <button class="btn danger" id="logoutAsk" data-ask="Tocca ancora per uscire">Esci dall'account Google</button>
-      <span class="sub" id="ver"></span>
-    </div></section>`;
+    <button class="btn" type="button" id="cfgSave" ${c.saving ? "disabled" : ""}>${c.saving ? "Salvo…" : "Salva"}</button></div>`;
 }
 // Piano di accumulo (PAC): facoltativo, spento finché non lo accendi qui.
 function pacSection(c) {
@@ -1111,7 +1121,7 @@ async function cfgSave() {
     c.saving = false; c.err = writeError(e) || "Non sono riuscito a salvare."; render(); return;
   }
   store.set("ca-nome", nomeUtente);
-  S.cfg = null; S.tab = "home"; render(); window.scrollTo(0, 0);
+  S.cfg = null; S.tab = "prof"; render(); window.scrollTo(0, 0);
   toast("Impostazioni salvate"); loadAll();
 }
 
