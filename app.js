@@ -239,7 +239,8 @@ function pacEtf() {
   const valore = k.quote != null && k.prezzo != null ? Math.round(k.quote * k.prezzo * 100) / 100 : null;
   return { nome: info ? info.nome : k.etf, isin: info ? info.isin : "", mensile: k.importo_pac, valore };
 }
-const append = (range, values) => api("/values/" + encodeURIComponent(range) + ":append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS", { method: "POST", body: JSON.stringify({ values }) });
+// OVERWRITE scrive nelle righe vuote già formattate: con INSERT_ROWS le righe nuove nascevano senza formato data/euro.
+const append = (range, values) => api("/values/" + encodeURIComponent(range) + ":append?valueInputOption=USER_ENTERED&insertDataOption=OVERWRITE", { method: "POST", body: JSON.stringify({ values }) });
 
 /* ---------- coda offline ----------
    Senza rete (o con l'accesso Google scaduto) un movimento finisce qui, salvato sul telefono,

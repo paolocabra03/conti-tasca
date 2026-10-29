@@ -137,9 +137,14 @@ test("buildCreateBody: formule di Conti e Riepilogo in A1", () => {
   const b = C.buildCreateBody(createInput());
   for (const i of [1, 2]) {
     const f = b.sheets[i].data[0].rowData[0].values[0].userEnteredValue.formulaValue;
-    assert.ok(typeof f === "string" && f.startsWith("="), b.sheets[i].properties.title);
+    // Senza ARRAYFORMULA il foglio calcola solo la prima riga e mette #N/A nelle altre.
+    assert.ok(typeof f === "string" && f.startsWith("=ARRAYFORMULA("), b.sheets[i].properties.title);
   }
   assert.ok(b.sheets[1].data[0].rowData[0].values[0].userEnteredValue.formulaValue.includes('SUM(FILTER(s;t<>"NO"))'));
+  // Il Riepilogo guarda colonne intere: con un intervallo come A2:D le righe aggiunte lo farebbero slittare.
+  const riep = b.sheets[2].data[0].rowData[0].values[0].userEnteredValue.formulaValue;
+  assert.ok(riep.includes("FILTER(Movimenti!A:D;ISNUMBER(Movimenti!A:A)"));
+  assert.ok(!/Movimenti![A-Z]2:/.test(riep));
 });
 
 test("buildFormatRequests: date, euro e mesi sulle colonne giuste", () => {
